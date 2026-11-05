@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}ArchiveTV Manager{% endblock %}</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+{% if user %}
+<header class="top">
+  <a class="brand" href="/admin">ArchiveTV</a>
+  {% set p = request.url.path %}
+  <nav>
+    <a href="/admin" class="{{ 'on' if p == '/admin' }}">Dashboard</a>
+    <a href="/admin/discovery" class="{{ 'on' if p.startswith('/admin/discovery') }}">Discovery sources</a>
+    <a href="/admin/review" class="{{ 'on' if p.startswith('/admin/review') }}">Review queue{% if pending_count %} <span class="chip warn">{{ pending_count }}</span>{% endif %}</a>
+    <a href="/admin/catalogue" class="{{ 'on' if p.startswith('/admin/catalogue') or p.startswith('/admin/items') }}">Catalogue</a>
+    <a href="/admin/channels" class="{{ 'on' if p.startswith('/admin/channels') }}">Channels</a>
+    <a href="/admin/schedule" class="{{ 'on' if p.startswith('/admin/schedule') }}">Schedule</a>
+    <a href="/admin/catchup" class="{{ 'on' if p.startswith('/admin/catchup') }}">Catch-up</a>
+    <a href="/admin/sources" class="{{ 'on' if p.startswith('/admin/sources') }}">Playback sources</a>
+    <a href="/admin/settings" class="{{ 'on' if p.startswith('/admin/settings') }}">Settings</a>
+  </nav>
+  <form class="inline" method="post" action="/logout"><button>Sign out</button></form>
+</header>
+{% endif %}
+<main>
+{% if flash %}<div class="flash {{ flash.kind }}">{{ flash.msg }}</div>{% endif %}
+{% block content %}{% endblock %}
+</main>
+</body>
+</html>

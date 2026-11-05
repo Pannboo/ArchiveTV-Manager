@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Discovery sources</h1>
+
+<div class="panel">
+  <h3>Import a single URL</h3>
+  <form method="post" action="/admin/import" class="toolbar">
+    <input type="text" name="url" placeholder="https://archive.org/details/…  ·  https://www.youtube.com/watch?v=…  ·  playlist  ·  @channel" style="flex:1;min-width:300px" required>
+    <button class="primary">Import to review queue</button>
+  </form>
+  <p class="small muted">YouTube links are catalogued as discovery/reference records with an embedded preview. They cannot air until you attach an independently authorised playback source.</p>
+</div>
+
+<div class="panel">
+<table>
+  <tr><th>Rule</th><th>Provider</th><th>Query</th><th>Channels</th><th>Every</th><th>Last run</th><th></th></tr>
+  {% for r in rules %}
+  <tr>
+    <td><b>{{ r.name }}</b> {% if not r.enabled %}<span class="chip">paused</span>{% endif %}<div class="small muted">{{ r.kind }} · max {{ r.max_results }}</div></td>
+    <td>{{ provider_labels().get(r.provider, r.provider) }}</td>
+    <td class="small"><code>{{ r.query or '' }}</code>{% for k, v in (r.params or {}).items() %} <span class="chip">{{ k }}={{ v }}</span>{% endfor %}</td>
+    <td class="small">{% for c in r.channels %}{{ c.name }}{% if not loop.last %}, {% endif %}{% else %}<span class="muted">—</span>{% endfor %}</td>
+    <td class="small">{{ r.scan_interval_minutes // 60 }}h{{ '%02d'|format(r.scan_interval_minutes % 60) }}</td>
+    <td class="small">{{ r.last_run_at|local }}<br>{% if r.last_status == 'error' %}<span class="chip bad" title="{{ r.last_error }}">error</span> {{ (r.last_error or '')[:120] }}{% elif r.last_status %}<span class="chip ok">{{ r.last_status }}</span> {{ r.last_new_count }} new{% endif %}</td>
+    <td style="white-space:nowrap">
+      <form class="inline" method="post" action="/admin/discovery/{{ r.id }}/run"><button>Run now</button></form>
+      <a class="btn" href="/admin/discovery?edit={{ r.id }}">Edit</a>
+      <form class="inline" method="post" action="/admin/discovery/{{ r.id }}/delete" onsubmit="return confirm('Delete this rule?')"><button class="danger">Delete</button></form>
+    </td>
+  </tr>
+  {% else %}<tr><td colspan="7" class="muted">No rules yet.</td></tr>{% endfor %}
+</table>
+</div>
+
+{% set r = editing %}
+{% set p = (r.params if r else {}) or {} %}
+<div class="panel">
+  <h2 style="margin-top:0">{{ 'Edit rule' if r else 'New discovery rule' }}</h2>
+  {% if not yt.configured %}<p class="small"><span class="chip warn">YouTube</span> No API key configured — set <code>YOUTUBE_API_KEY</code> to enable YouTube rules.</p>{% endif %}
+  <form method="post" action="/admin/discovery">
+    {% if r %}<input type="hidden" name="rule_id" value="{{ r.id }}">{% endif %}
+    <div class="fields">
+      <label><span>Name</span><input type="text" name="name" value="{{ r.name if r else '' }}" required></label>
+      <label><span>Provider</span><select name="provider">{% for k, v in provider_labels().items() %}<option value="{{ k }}" {{ 'selected' if r and r.provider == k }}>{{ v }}</option>{% endfor %}</select></label>
+      <label><span>Kind</span><select name="kind">
+        {% for k, lab in [('search','Keyword search'),('collection','Archive collection'),('channel','YouTube channel uploads'),('playlist','YouTube playlist'),('video','Single item / URL')] %}
+        <option value="{{ k }}" {{ 'selected' if r and r.kind == k }}>{{ lab }}</option>{% endfor %}</select></label>
+      <label><span>Query / keywords / URL</span><input type="text" name="query" value="{{ r.query if r and r.query else '' }}" placeholder="e.g. television commercial"></label>
+      <label><span>Max results per scan</span><input type="number" name="max_results" min="1" max="500" value="{{ r.max_results if r else 50 }}"></label>
+      <label><span>Scan every (minutes)</span><input type="number" name="scan_interval_minutes" min="15" value="{{ r.scan_interval_minutes if r else 1440 }}"></label>
+    </div>
+    <h3>Filters</h3>
+    <div class="fields">
+      <label><span>Archive collection(s) <span class="muted">; separated</span></span><input type="text" name="collection" value="{{ p.collection or '' }}" placeholder="classic_tv"></label>
+      <label><span>Archive creator</span><input type="text" name="creator" value="{{ p.creator or '' }}"></label>
+      <label><span>Archive subject</span><input type="text" name="subject" value="{{ p.subject or '' }}"></label>
+      <label><span>Year from / to</span><span style="display:flex;gap:6px"><input type="number" name="year_from" value="{{ p.year_from or '' }}"><input type="number" name="year_to" value="{{ p.year_to or '' }}"></span></label>
+      <label><span>YouTube channel (@handle, URL or UC id)</span><input type="text" name="channel" value="{{ p.channel or '' }}"></label>
+      <label><span>YouTube playlist (URL or id)</span><input type="text" name="playlist" value="{{ p.playlist or '' }}"></label>
+      <label><span>Published after / before</span><span style="display:flex;gap:6px"><input type="date" name="published_after" value="{{ p.published_after or '' }}"><input type="date" name="published_before" value="{{ p.published_before or '' }}"></span></label>
+      <label><span>Min / max duration (minutes or H:MM:SS)</span><span style="display:flex;gap:6px"><input type="text" name="min_duration" value="{{ (p.min_duration/60)|round(1) if p.min_duration else '' }}"><input type="text" name="max_duration" value="{{ (p.max_duration/60)|round(1) if p.max_duration else '' }}"></span></label>
+      <label><span>Preferred YouTube categories (ids or names, comma)</span><input type="text" name="categories" value="{{ p.categories or '' }}" placeholder="1, 24, Entertainment"></label>
+      <label><span>Excluded channels/creators (comma)</span><input type="text" name="excluded_channels" value="{{ p.excluded_channels or '' }}"></label>
+      <label><span>Excluded keywords (comma)</span><input type="text" name="excluded_keywords" value="{{ p.excluded_keywords or '' }}"></label>
+      <label><span>Archive sort</span><input type="text" name="sort" value="{{ p.sort or '' }}" placeholder="addeddate desc"></label>
+      <label><span>Preferred formats, best first (comma)</span><input type="text" name="preferred_formats" value="{{ p.preferred_formats or '' }}" placeholder="h.264, mpeg4, mkv"></label>
+      <label><span>Preferred resolution</span><select name="preferred_height"><option value="">Any (format order only)</option>
+        {% for h in (360, 480, 576, 720, 1080) %}<option value="{{ h }}" {{ 'selected' if p.preferred_height|string == h|string }}>{{ h }}p</option>{% endfor %}</select></label>
+    </div>
+    <label class="inline"><input type="checkbox" name="licensed_only" {{ 'checked' if p.licensed_only }}> Archive: only items with a declared licence</label>
+    <label class="inline"><input type="checkbox" name="embeddable_only" {{ 'checked' if p.embeddable_only }}> YouTube: embeddable only</label>
+    <label class="inline"><input type="checkbox" name="skip_validation" {{ 'checked' if p.skip_validation }}> Skip automatic validation (FFprobe) — unvalidated items cannot be scheduled</label>
+    <label class="inline"><input type="checkbox" name="enabled" {{ 'checked' if (not r or r.enabled) }}> Enabled</label>
+    <p class="small muted">Manual approval is always required: discovered items are never scheduled until an administrator approves them.</p>
+    <h3>Linked channels</h3>
+    <p class="small muted">Items from this rule are added to these channels when you approve them.</p>
+    {% for c in channels %}<label class="inline"><input type="checkbox" name="channel_ids" value="{{ c.id }}" {{ 'checked' if r and c in r.channels }}> {{ c.name }}</label>{% else %}<span class="muted small">No channels yet.</span>{% endfor %}
+    <p><button class="primary">Save rule</button> {% if r %}<a class="btn" href="/admin/discovery">Cancel</a>{% endif %}</p>
+  </form>
+  <p class="small muted">YouTube quota: keyword search costs 100 units per page; channel and playlist enumeration costs 1 unit per 50 videos, so prefer those for known sources.</p>
+</div>
+{% endblock %}

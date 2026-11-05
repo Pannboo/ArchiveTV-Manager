@@ -1,0 +1,107 @@
+{% extends "base.html" %}
+{% from "_macros.html" import status_chip, iptv_chip %}
+{% block content %}
+<h1>{{ ch.name }} <span class="muted small"><code>{{ ch.slug }}</code></span></h1>
+<div class="toolbar">
+  <a class="btn" href="/admin/schedule?channel={{ ch.id }}">View schedule</a>
+  <form class="inline" method="post" action="/admin/channels/{{ ch.id }}/regenerate" onsubmit="return confirm('Rebuild all upcoming entries? The programme on air now is kept.')"><button>Regenerate schedule</button></form>
+  <span class="small muted">Stream: <code>/live/{{ ch.slug }}.ts</code></span>
+</div>
+
+<div class="grid" style="grid-template-columns: minmax(300px, 1fr) minmax(320px, 1.4fr)">
+<div>
+<div class="panel">
+  <h3 style="margin-top:0">Settings</h3>
+  <form method="post" action="/admin/channels/{{ ch.id }}">
+    <div class="fields">
+      <label><span>Name</span><input type="text" name="name" value="{{ ch.name }}"></label>
+      <label><span>Number</span><input type="number" name="number" value="{{ ch.number or '' }}"></label>
+      <label><span>TVG ID</span><input type="text" name="tvg_id" value="{{ ch.tvg_id }}"></label>
+      <label><span>Group</span><input type="text" name="group_title" value="{{ ch.group_title }}"></label>
+      <label><span>Logo URL</span><input type="url" name="logo_url" value="{{ ch.logo_url or '' }}"></label>
+      <label><span>Mode</span><select name="mode">{% for m in ScheduleMode %}<option value="{{ m.value }}" {{ 'selected' if ch.mode == m.value }}>{{ m.value }}</option>{% endfor %}</select></label>
+      <label><span>Shuffle seed</span><input type="text" name="seed" value="{{ ch.seed }}"></label>
+      <label><span>Avoid repeating last N items</span><input type="number" name="repeat_avoid_count" min="0" value="{{ ch.repeat_avoid_count }}"></label>
+      <label><span>Output</span><select name="playback_format">{% for f in PlaybackFormat %}<option value="{{ f.value }}" {{ 'selected' if ch.playback_format == f.value }}>{{ f.value }}</option>{% endfor %}</select></label>
+      <label><span>Fallback programme</span><select name="fallback_item_id"><option value="">— generated "off air" card —</option>
+        {% for ci in ch.items %}<option value="{{ ci.media_item_id }}" {{ 'selected' if ch.fallback_item_id == ci.media_item_id }}>{{ ci.media_item.title[:60] }}</option>{% endfor %}</select></label>
+      <label><span>Programme history (catch-up window)</span><select name="catchup_days">{% for d in RETENTION_CHOICES %}<option value="{{ d }}" {{ 'selected' if history_days(ch) == d }}>{{ d }} day{{ 's' if d > 1 }}</option>{% endfor %}</select></label>
+    </div>
+    <label>Description<br><textarea name="description">{{ ch.description or '' }}</textarea></label>
+    <label class="inline"><input type="checkbox" name="enabled" {{ 'checked' if ch.enabled }}> Enabled (published in M3U/XMLTV)</label>
+    <label class="inline"><input type="checkbox" name="idents_between" {{ 'checked' if ch.idents_between }}> Station ident between programmes</label>
+    <label class="inline"><input type="checkbox" name="filler_pad" {{ 'checked' if ch.filler_pad }}> Pad to block starts with filler</label>
+    <label class="inline"><input type="checkbox" name="catchup_enabled" {{ 'checked' if ch.catchup_enabled }}> Catch-up and Start Over (replays past programmes from their original source; nothing is recorded)</label>
+    <h3>Discovery rules feeding this channel</h3>
+    {% for r in rules %}<label class="inline small"><input type="checkbox" name="rule_ids" value="{{ r.id }}" {{ 'checked' if r in ch.rules }}> {{ r.name }}</label>{% else %}<span class="muted small">No rules.</span>{% endfor %}
+    <p><button class="primary">Save channel</button></p>
+  </form>
+  <h3>Logo</h3>
+  <div class="toolbar">
+    {% if ch.logo_file %}<img src="/logos/{{ ch.logo_file }}" alt="" style="height:48px;background:#fff2;border-radius:4px;padding:4px">{% elif ch.logo_url %}<span class="small muted">Using logo URL</span>{% endif %}
+    <form class="inline" method="post" action="/admin/channels/{{ ch.id }}/logo" enctype="multipart/form-data">
+      <input type="file" name="logo" accept="image/png,image/jpeg,image/webp" required> <button>Upload</button>
+    </form>
+    {% if ch.logo_file %}<form class="inline" method="post" action="/admin/channels/{{ ch.id }}/logo"><input type="hidden" name="remove" value="1"><button class="danger">Remove</button></form>{% endif %}
+    <span class="small muted">PNG, JPEG or WebP up to 1 MB. An uploaded logo replaces the logo URL in the M3U, XMLTV and Xtream Codes feeds.</span>
+  </div>
+  <p class="small muted">"auto" output remuxes H.264/AAC sources without re-encoding and transcodes everything else to {{ '' }}H.264/AAC.</p>
+</div>
+
+<div class="panel">
+  <h3 style="margin-top:0">Programme blocks <span class="muted small">({{ tz_name() }})</span></h3>
+  <table>
+    {% for b in ch.blocks %}
+    <tr><td><b>{{ b.name }}</b><div class="small muted">{{ b.start_time }}–{{ b.end_time }} · {{ b.mode }} · days {{ b.days }}</div></td><td class="small">{{ b.tag_filter or 'any' }}</td>
+      <td><form method="post" action="/admin/blocks/{{ b.id }}/delete"><button class="danger">×</button></form></td></tr>
+    {% else %}<tr><td class="muted small">No blocks: the whole day uses the channel mode.</td></tr>{% endfor %}
+  </table>
+  <form method="post" action="/admin/channels/{{ ch.id }}/blocks">
+    <div class="fields">
+      <label><span>Name</span><input type="text" name="name" required placeholder="Saturday morning cartoons"></label>
+      <label><span>Start / end</span><span style="display:flex;gap:6px"><input type="time" name="start_time" required><input type="time" name="end_time" required></span></label>
+      <label><span>Tags/categories (comma, any match)</span><input type="text" name="tag_filter" placeholder="cartoons, animation"></label>
+      <label><span>Mode</span><select name="mode"><option value="shuffle">shuffle</option><option value="sequential">sequential</option></select></label>
+    </div>
+    {% for d, n in [('0','Mon'),('1','Tue'),('2','Wed'),('3','Thu'),('4','Fri'),('5','Sat'),('6','Sun')] %}<label class="inline small"><input type="checkbox" name="days" value="{{ d }}" checked> {{ n }}</label>{% endfor %}
+    <p><button>Add block</button></p>
+  </form>
+</div>
+<div class="panel">
+  <form method="post" action="/admin/channels/{{ ch.id }}/delete" class="toolbar">
+    <input type="text" name="confirm" placeholder="type {{ ch.slug }} to delete">
+    <button class="danger">Delete channel</button>
+  </form>
+</div>
+</div>
+
+<div>
+<form method="post" action="/admin/channels/{{ ch.id }}/items">
+<div class="panel">
+  <h3 style="margin-top:0">Assigned content</h3>
+  <p class="small muted">Sequential order follows position (lower first). Items that aren't approved with an authorised, eligible source are skipped by the scheduler.</p>
+  <table>
+    <tr><th>Pos</th><th>Title</th><th>Role</th><th>Eligibility</th><th>Remove</th></tr>
+    {% for ci in ch.items %}
+    <tr>
+      <td><input type="number" name="pos_{{ ci.id }}" value="{{ ci.position }}" style="width:70px"></td>
+      <td><a href="/admin/items/{{ ci.media_item_id }}">{{ ci.media_item.title }}</a><div class="small muted">{{ ci.media_item.provider }} · {{ ci.media_item.duration|dur }}</div></td>
+      <td><select name="role_{{ ci.id }}">{% for r in ChannelRole %}<option value="{{ r.value }}" {{ 'selected' if ci.role == r.value }}>{{ r.value }}</option>{% endfor %}</select></td>
+      <td>{{ status_chip(ci.media_item.review_status) }} {{ iptv_chip(ci.media_item) }}</td>
+      <td><input type="checkbox" name="remove_{{ ci.id }}"></td>
+    </tr>
+    {% else %}<tr><td colspan="5" class="muted">Nothing assigned yet.</td></tr>{% endfor %}
+  </table>
+  <p><button class="primary">Save order &amp; roles</button></p>
+</div>
+<div class="panel">
+  <h3 style="margin-top:0">Add approved items</h3>
+  <div style="max-height:320px;overflow:auto">
+  {% for it in approved %}<label class="small"><input type="checkbox" name="add_ids" value="{{ it.id }}"> {{ it.title }} <span class="muted">({{ it.provider }}, {{ it.duration|dur }})</span> {{ iptv_chip(it) }}</label>{% else %}<span class="muted small">No other approved items.</span>{% endfor %}
+  </div>
+  <p>As <select name="add_role">{% for r in ChannelRole %}<option value="{{ r.value }}">{{ r.value }}</option>{% endfor %}</select> <button>Add selected</button></p>
+</div>
+</form>
+</div>
+</div>
+{% endblock %}

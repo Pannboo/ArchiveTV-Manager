@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Schedule</h1>
+<form method="get" class="toolbar">
+  <select name="channel" onchange="this.form.submit()">{% for c in channels %}<option value="{{ c.id }}" {{ 'selected' if ch and c.id == ch.id }}>{{ c.name }}</option>{% endfor %}</select>
+  <select name="day" onchange="this.form.submit()">{% for d in days %}<option value="{{ d.isoformat() }}" {{ 'selected' if d == day }}>{{ d.strftime('%a %d %b') }}</option>{% endfor %}</select>
+  <noscript><button>Show</button></noscript>
+</form>
+{% if ch %}
+<div class="toolbar">
+  <form class="inline" method="post" action="/admin/schedule/maintain"><button>Check &amp; extend now</button></form>
+  <form class="inline" method="post" action="/admin/channels/{{ ch.id }}/regenerate" onsubmit="return confirm('Rebuild all upcoming entries for this channel?')"><button>Regenerate</button></form>
+  <span class="small muted">Times in {{ tz_name() }} · stored in UTC · {{ eligible|length }} eligible programme(s)</span>
+</div>
+{% if problems %}<div class="flash error">Continuity problems: {{ problems|join('; ') }}</div>{% endif %}
+<div class="panel">
+<table>
+  <tr><th>Start</th><th>End</th><th>Programme</th><th>Kind</th><th>Block</th><th>Override / replay</th></tr>
+  {% for e in entries %}
+  <tr class="{{ 'now' if cur and e.id == cur.id }}">
+    <td>{{ e.start|local('%H:%M:%S') }}</td><td>{{ e.end|local('%H:%M:%S') }}</td>
+    <td>{% if e.media_item_id %}<a href="/admin/items/{{ e.media_item_id }}">{{ e.title }}</a>{% else %}{{ e.title }}{% endif %}{% if e.overridden %} <span class="chip">override</span>{% endif %}</td>
+    <td><span class="chip {{ 'bad' if e.kind == 'slate' }}">{{ e.kind }}</span></td>
+    <td class="small">{{ e.block_name or '' }}</td>
+    <td>{% if e.start > now and eligible %}
+      <form method="post" action="/admin/schedule/{{ e.id }}/override" class="toolbar">
+        <select name="item_id">{% for it in eligible %}<option value="{{ it.id }}">{{ it.title[:50] }} ({{ it.duration|dur }})</option>{% endfor %}</select>
+        <button>Replace</button>
+      </form>{% elif e.end <= now and ch.catchup_enabled and e.kind != 'slate' %}<a class="small" href="/catchup/{{ ch.slug }}.ts?start={{ e.start.isoformat() }}Z{{ tok }}" title="Open in VLC or another IPTV player">catch-up stream</a>{% endif %}</td>
+  </tr>
+  {% else %}<tr><td colspan="6" class="muted">Nothing scheduled for this day.</td></tr>{% endfor %}
+</table>
+</div>
+<h2>Publication history</h2>
+<div class="panel">
+<table>
+  <tr><th>When</th><th>Change</th><th>By</th><th>From</th><th>Entries</th><th>Scheduled until</th><th>Note</th></tr>
+  {% for v in versions %}
+  <tr><td>{{ v.created_at|local }}{% if v.updated_at and v.updated_at != v.created_at %}<div class="small muted">to {{ v.updated_at|local('%H:%M') }}</div>{% endif %}</td>
+    <td><span class="chip {{ 'warn' if v.reason in ('failover', 'rebuild') }}">{{ v.reason }}</span></td><td class="small">{{ v.actor }}</td>
+    <td class="small">{{ v.changed_from|local if v.changed_from else '—' }}</td>
+    <td class="small">+{{ v.entries_added }} / −{{ v.entries_removed }}</td><td class="small">{{ v.horizon|local }}</td>
+    <td class="small muted">{{ (v.note or '')[:120] }}</td></tr>
+  {% else %}<tr><td colspan="7" class="muted">No changes recorded yet.</td></tr>{% endfor %}
+</table>
+</div>
+{% else %}<p class="muted">Create a channel first.</p>{% endif %}
+{% endblock %}

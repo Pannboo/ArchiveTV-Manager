@@ -1,0 +1,68 @@
+# ArchiveTV Manager alongside an existing Dispatcharr install.
+#
+# Dispatcharr is NOT defined or modified here. This service joins the Docker
+# network Dispatcharr already uses, so Dispatcharr reaches the feeds at
+# http://archivetv:8090 without exposing anything publicly.
+#
+#   docker network ls            # find Dispatcharr's network (e.g. dispatcharr_default)
+#   cp .env.example .env         # set DISPATCHARR_NETWORK, ATV_ADMIN_PASSWORD, ...
+#   docker compose up -d --build
+
+services:
+  archivetv:
+    build: .
+    image: archivetv-manager:2.0
+    container_name: archivetv
+    restart: unless-stopped
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      TZ: Europe/London
+      ATV_PUBLIC_BASE_URL: ${ATV_PUBLIC_BASE_URL:-http://archivetv:8090}
+      # Minimal-disk architecture: nothing is downloaded or recorded.
+      ATV_DISABLE_MEDIA_RECORDING: "true"
+      YOUTUBE_API_KEY_FILE: /run/secrets/youtube_api_key
+    secrets:
+      - youtube_api_key
+    volumes:
+      - archivetv-data:/data
+      # Rights-cleared local files: idents, filler, rights-holder masters.
+      - ${ATV_MEDIA_PATH:-./media}:/media:ro
+    # Admin UI is bound to localhost by default. To reach it from your LAN,
+    # change to e.g. "192.168.1.10:8090:8090" (never 0.0.0.0 on a public host).
+    ports:
+      - "127.0.0.1:${ATV_HOST_PORT:-8090}:8090"
+    networks:
+      - dispatcharr
+    # Resource constraints: FFmpeg transcodes are the main cost.
+    cpus: ${ATV_CPUS:-2.0}
+    mem_limit: ${ATV_MEM_LIMIT:-2g}
+    pids_limit: 256
+    read_only: true
+    # RAM-backed scratch space; media itself never touches disk.
+    tmpfs:
+      - /tmp:size=256m,mode=1777
+    # Size-limited logs (the app logs to stdout only).
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    stop_grace_period: 15s
+
+networks:
+  dispatcharr:
+    external: true
+    name: ${DISPATCHARR_NETWORK:-dispatcharr_default}
+
+volumes:
+  archivetv-data:
+
+secrets:
+  youtube_api_key:
+    # Create an empty file if you are not using YouTube discovery.
+    file: ${YOUTUBE_API_KEY_PATH:-./secrets/youtube_api_key}

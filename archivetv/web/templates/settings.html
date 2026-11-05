@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Settings</h1>
+<div class="grid">
+<div class="panel">
+  <h3 style="margin-top:0">Dispatcharr: Xtream Codes account (live + catch-up)</h3>
+  <p class="small">Dispatcharr only passes catch-up through for <b>Xtream Codes</b> accounts. Add ArchiveTV in <i>M3U &amp; EPG Manager → Add M3U → type Xtream Codes</i>:</p>
+  <table class="small">
+    <tr><td>Server URL</td><td><code>{{ base }}</code></td></tr>
+    <tr><td>Username</td><td><code>{{ xc_user }}</code></td></tr>
+    <tr><td>Password</td><td>{% if xc_password_env %}from <code>ATV_XC_PASSWORD</code>{% else %}generated: <code>docker exec archivetv cat /data/run/xc_password</code>{% endif %}</td></tr>
+    <tr><td>EPG (XMLTV)</td><td><code>{{ base }}/xmltv.php?username={{ xc_user }}&amp;password=…</code></td></tr>
+  </table>
+  <p class="small muted">Then raise Dispatcharr's <i>Settings → EPG → Default days back</i> (it is 0 by default), or past programmes never reach your player.</p>
+  <h3>Plain M3U feeds (live only)</h3>
+  <p class="small">Add these in Dispatcharr as an <b>M3U account</b> and an <b>EPG source</b>. Use the hostname Dispatcharr can reach (on a shared Docker network: the container name).</p>
+  <table class="small">
+    <tr><td>M3U</td><td><code>{{ base }}/playlist.m3u{{ tok }}</code></td></tr>
+    <tr><td>XMLTV</td><td><code>{{ base }}/epg.xml{{ tok }}</code></td></tr>
+    <tr><td>Stream</td><td><code>{{ base }}/live/&lt;channel-id&gt;.ts{{ tok }}</code></td></tr>
+    <tr><td>Health</td><td><code>{{ base }}/health</code></td></tr>
+  </table>
+  <p class="small muted">Feed token: {{ 'set (ATV_FEED_TOKEN)' if feed_token_set else 'not set — feeds are open to anything that can reach this port' }}.</p>
+</div>
+<div class="panel">
+  <h3 style="margin-top:0">Credentials</h3>
+  <p class="small">YouTube Data API key: {% if yt_configured %}<span class="chip ok">configured</span>{% else %}<span class="chip bad">not set</span>{% endif %}</p>
+  <p class="small muted">API keys and the admin password are read from environment variables or Docker secrets (<code>YOUTUBE_API_KEY</code> / <code>YOUTUBE_API_KEY_FILE</code>, <code>ATV_ADMIN_PASSWORD</code>). They are never stored in the database or sent to the browser.</p>
+  {% set yt = statuses.get('youtube') %}
+  {% if yt %}<p class="small">YouTube quota used today: <b>{{ yt.quota_used }}</b> units{% if yt.quota_exhausted_until %} · exhausted until {{ yt.quota_exhausted_until|local }}{% endif %}</p>{% endif %}
+  <p class="small">Storage: {% if minimal_disk %}<span class="chip ok">minimal-disk mode</span> nothing is downloaded, cached to disk or recorded{% else %}<span class="chip warn">minimal-disk mode off</span>{% endif %}</p>
+  <h3>Media</h3>
+  <p class="small">Media folder: <code>{{ media_dir }}</code><br>Allowed remote media hosts: {% for h in allowed_hosts %}<code>{{ h }}</code> {% endfor %}<br><span class="muted">Add hosts with <code>ATV_ALLOWED_MEDIA_HOSTS</code>. YouTube hosts can never be media sources.</span></p>
+</div>
+<div class="panel">
+  <h3 style="margin-top:0">Backups</h3>
+  <form method="post" action="/admin/settings/backup"><button>Back up database now</button></form>
+  {% for b in backups %}<div class="small"><code>{{ b.name }}</code></div>{% else %}<p class="small muted">No backups yet (one is made daily).</p>{% endfor %}
+</div>
+</div>
+
+<div class="panel">
+  <h3 style="margin-top:0">Tunables</h3>
+  <form method="post" action="/admin/settings">
+    <div class="fields">
+    {% for key, (kind, label, help) in tunables.items() %}
+      {% if kind.__name__ == 'bool' %}
+      <label><span>{{ label }}</span><input type="checkbox" name="{{ key }}" {{ 'checked' if values[key] }}> <span class="small muted">{{ help }}</span></label>
+      {% else %}
+      <label><span>{{ label }}</span><input type="{{ 'number' if kind.__name__ == 'int' else 'text' }}" name="{{ key }}" value="{{ values[key] if values[key] is not none else '' }}"><span class="small muted">{{ help }}</span></label>
+      {% endif %}
+    {% endfor %}
+    </div>
+    <p><button class="primary">Save settings</button></p>
+  </form>
+</div>
+{% endblock %}

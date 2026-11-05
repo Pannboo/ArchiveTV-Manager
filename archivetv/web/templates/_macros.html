@@ -1,0 +1,35 @@
+{% macro status_chip(s) -%}
+{%- set cls = {'APPROVED':'ok','PENDING_REVIEW':'warn','REJECTED':'bad','QUARANTINED':'bad','UNAVAILABLE':'bad'}.get(s, '') -%}
+<span class="chip {{ cls }}">{{ s.replace('_', ' ').lower() }}</span>
+{%- endmacro %}
+
+{% macro elig_chip(e) -%}
+{%- set cls = {'IPTV_READY':'ok','IPTV_NEEDS_TRANSCODE':'ok','EMBED_ONLY':'warn','REFERENCE_ONLY':'warn','UNAVAILABLE':'bad'}.get(e, '') -%}
+<span class="chip {{ cls }}">{{ e.replace('_', ' ').lower() }}</span>
+{%- endmacro %}
+
+{% macro rights_chip(r) -%}
+{%- set cls = {'AUTHORISED':'ok','CATALOGUE_ONLY':'warn','RESTRICTED':'bad'}.get(r, '') -%}
+<span class="chip {{ cls }}">rights: {{ r.replace('_', ' ').lower() }}</span>
+{%- endmacro %}
+
+{% macro iptv_chip(item) -%}
+{%- set st = iptv_status(item) -%}
+<span class="chip {{ 'ok' if st == 'eligible' else 'warn' }}" title="IPTV schedule eligibility">IPTV: {{ st }}</span>
+{%- endmacro %}
+
+{% macro preview(item) -%}
+{%- set ns = namespace(done=false) -%}
+{%- for ps in item.playback_sources if not ns.done -%}
+  {%- if ps.playback_type == 'youtube_embed' or ps.playback_type == 'archive_embed' -%}
+    <iframe src="{{ ps.url }}" loading="lazy" allow="encrypted-media; picture-in-picture; fullscreen" allowfullscreen referrerpolicy="strict-origin-when-cross-origin"></iframe>
+    {%- set ns.done = true -%}
+  {%- endif -%}
+{%- endfor -%}
+{%- for ps in item.playback_sources if not ns.done -%}
+  {%- if ps.playback_type == 'direct_url' -%}<video controls preload="none" src="{{ ps.url }}" poster="{{ item.thumbnail_url or '' }}"></video>{%- set ns.done = true -%}
+  {%- elif ps.playback_type == 'local_file' -%}<video controls preload="metadata" src="/admin/preview/local/{{ ps.id }}"></video>{%- set ns.done = true -%}
+  {%- endif -%}
+{%- endfor -%}
+{%- if not ns.done and item.thumbnail_url -%}<img class="thumb" src="{{ item.thumbnail_url }}" alt="" loading="lazy">{%- endif -%}
+{%- endmacro %}

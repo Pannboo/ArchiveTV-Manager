@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Catch-up</h1>
+<p class="small muted">Past programmes are replayed from their original source, each viewer with an independent playhead. Nothing is recorded; availability is checked again at playback time. Times in {{ tz_name() }}.</p>
+<form method="get" class="toolbar">
+  <select name="channel" onchange="this.form.submit()">{% for c in channels %}<option value="{{ c.id }}" {{ 'selected' if ch and c.id == ch.id }}>{{ c.name }}</option>{% endfor %}</select>
+  <noscript><button>Show</button></noscript>
+</form>
+{% if ch %}
+<div class="grid">
+<div class="panel">
+  <h3 style="margin-top:0">{{ ch.name }}</h3>
+  <p class="small">Catch-up: {% if ch.catchup_enabled %}<span class="chip ok">enabled</span>{% else %}<span class="chip bad">disabled</span>{% endif %}
+    · history kept {{ history_days(ch) }} day{{ 's' if history_days(ch) > 1 }} · <a href="/admin/channels/{{ ch.id }}">change</a></p>
+  <form method="post" action="/admin/catchup/test" class="toolbar">
+    <input type="hidden" name="channel_id" value="{{ ch.id }}">
+    <input type="datetime-local" name="at" step="1" required>
+    <button>Test historical seek</button>
+  </form>
+  <p class="small muted">Start Over (programme on air now): <code>{{ base }}/startover/{{ ch.slug }}.ts</code></p>
+</div>
+<div class="panel">
+  <h3 style="margin-top:0">Active sessions</h3>
+  {% for a in active %}
+  <div class="small"><b>{{ a.programme }}</b> on {{ a.slug }} · {{ a.protocol }} · from {{ a.requested_start[11:19] }}Z · now at {{ a.position[11:19] }}Z
+    <form class="inline" method="post" action="/admin/catchup/{{ a.session_id }}/stop"><button class="danger">Stop</button></form></div>
+  {% else %}<p class="small muted">None.</p>{% endfor %}
+</div>
+</div>
+
+<h2>Past programmes</h2>
+<div class="panel">
+<table>
+  <tr><th>Aired</th><th>Programme</th><th>Kind</th><th>Catch-up</th></tr>
+  {% for e, reason in progs %}
+  <tr><td>{{ e.start|local('%a %d %b %H:%M') }}–{{ e.end|local('%H:%M') }}</td>
+    <td>{% if e.media_item_id %}<a href="/admin/items/{{ e.media_item_id }}">{{ e.title }}</a>{% else %}{{ e.title }}{% endif %}</td>
+    <td><span class="chip">{{ e.kind }}</span></td>
+    <td>{% if not reason %}<span class="chip ok">available</span> <a class="small" href="/catchup/{{ ch.slug }}.ts?start={{ e.start.isoformat() }}Z{{ tok }}">stream</a>{% else %}<span class="chip bad">unavailable</span> <span class="small muted">{{ reason }}</span>{% endif %}</td></tr>
+  {% else %}<tr><td colspan="4" class="muted">No programme history yet.</td></tr>{% endfor %}
+</table>
+</div>
+{% else %}<p class="muted">Create a channel first.</p>{% endif %}
+
+<h2>Recent sessions</h2>
+<div class="panel">
+<table>
+  <tr><th>Started</th><th>Programme</th><th>Requested</th><th>Via</th><th>Status</th><th>Sent</th><th>Client</th></tr>
+  {% for r in sessions %}
+  <tr><td>{{ r.started_at|local('%a %H:%M:%S') }}</td><td>{{ r.title }}</td><td>{{ r.requested_start|local('%a %d %b %H:%M:%S') }}</td>
+    <td>{{ r.protocol }}</td>
+    <td><span class="chip {{ 'ok' if r.status in ('completed', 'stopped') else ('bad' if r.status == 'failed' else 'warn') }}">{{ r.status }}</span>{% if r.error %}<div class="small muted">{{ r.error[:120] }}</div>{% endif %}</td>
+    <td class="small">{{ (r.bytes_out / 1048576)|round(1) }} MB</td><td class="small muted">{{ (r.client or '')[:40] }}</td></tr>
+  {% else %}<tr><td colspan="7" class="muted">No catch-up sessions yet.</td></tr>{% endfor %}
+</table>
+</div>
+{% endblock %}

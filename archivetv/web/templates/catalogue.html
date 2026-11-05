@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% from "_macros.html" import status_chip, elig_chip, iptv_chip %}
+{% block content %}
+<h1>Media catalogue <span class="muted small">{{ total }} item(s)</span></h1>
+<form method="get" class="toolbar">
+  <input type="text" name="q" value="{{ q or '' }}" placeholder="title, description, creator, id">
+  <select name="provider"><option value="">all providers</option>{% for k, v in provider_labels().items() %}<option value="{{ k }}" {{ 'selected' if provider == k }}>{{ v }}</option>{% endfor %}<option value="local" {{ 'selected' if provider == 'local' }}>Local</option></select>
+  <select name="status"><option value="">any review state</option>{% for st in ReviewStatus %}<option value="{{ st.value }}" {{ 'selected' if status == st.value }}>{{ st.value.replace('_',' ').lower() }}</option>{% endfor %}</select>
+  <select name="eligibility"><option value="">any eligibility</option>{% for e in Eligibility %}<option value="{{ e.value }}" {{ 'selected' if eligibility == e.value }}>{{ e.value.replace('_',' ').lower() }}</option>{% endfor %}</select>
+  <select name="channel"><option value="">any channel</option>{% for c in channels %}<option value="{{ c.id }}" {{ 'selected' if channel == c.id }}>{{ c.name }}</option>{% endfor %}</select>
+  <button>Filter</button>
+</form>
+<form method="post" action="/admin/review/bulk">
+<div class="panel">
+  <div class="toolbar">
+    <button name="action" value="approve">Approve</button><button name="action" value="reject" class="danger">Reject</button>
+    <button name="action" value="authorise">Authorise IPTV rights</button><button name="action" value="revalidate">Revalidate</button>
+    <select name="channel_id"><option value="">— channel —</option>{% for c in channels %}<option value="{{ c.id }}">{{ c.name }}</option>{% endfor %}</select>
+    <button name="action" value="assign">Assign to channel</button>
+  </div>
+<table>
+  <tr><th><input type="checkbox" onclick="document.querySelectorAll('input[name=ids]').forEach(c=>c.checked=this.checked)"></th><th>Title</th><th>Provider</th><th>Duration</th><th>Review</th><th>Playback</th></tr>
+  {% for item in items %}
+  <tr>
+    <td><input type="checkbox" name="ids" value="{{ item.id }}"></td>
+    <td><a href="/admin/items/{{ item.id }}">{{ item.title }}</a>{% if item.duplicate_of_id %} <span class="chip warn">dup of #{{ item.duplicate_of_id }}</span>{% endif %}<div class="small muted">{{ item.source.creator or '' }} {{ item.publication_date or '' }}</div></td>
+    <td>{{ provider_labels().get(item.provider, item.provider|title) }}</td>
+    <td>{{ item.duration|dur }}</td>
+    <td>{{ status_chip(item.review_status) }}</td>
+    <td>{{ elig_chip(item_eligibility(item)) }} {{ iptv_chip(item) }}</td>
+  </tr>
+  {% else %}<tr><td colspan="6" class="muted">No matching items.</td></tr>{% endfor %}
+</table>
+</div>
+</form>
+<div class="pager">
+  {% set qs = 'q=' ~ (q or '') ~ '&provider=' ~ (provider or '') ~ '&status=' ~ (status or '') ~ '&eligibility=' ~ (eligibility or '') ~ '&channel=' ~ (channel or '') %}
+  {% if page > 1 %}<a class="btn" href="?{{ qs }}&page={{ page-1 }}">← Prev</a>{% endif %}
+  <span class="muted">Page {{ page }} / {{ pages }}</span>
+  {% if page < pages %}<a class="btn" href="?{{ qs }}&page={{ page+1 }}">Next →</a>{% endif %}
+</div>
+{% endblock %}

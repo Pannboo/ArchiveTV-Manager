@@ -1,0 +1,109 @@
+{% extends "base.html" %}
+{% from "_macros.html" import status_chip, elig_chip, rights_chip, iptv_chip, preview %}
+{% block content %}
+<h1>{{ item.title }}</h1>
+<div style="margin-bottom:12px">{{ status_chip(item.review_status) }} {{ elig_chip(item_eligibility(item)) }} {{ iptv_chip(item) }}
+  <span class="muted small">#{{ item.id }} · {{ provider_labels().get(item.provider, item.provider|title) }} <code>{{ item.source.external_id }}</code>
+  {% if item.source.original_url %}· <a href="{{ item.source.original_url }}" target="_blank" rel="noopener noreferrer">open at source</a>{% endif %}</span></div>
+
+<div class="grid" style="grid-template-columns: minmax(300px, 1fr) minmax(300px, 1.3fr)">
+<div>
+  <div class="panel preview">{{ preview(item) }}</div>
+  <div class="panel">
+    <h3 style="margin-top:0">Review</h3>
+    <form method="post" action="/admin/items/{{ item.id }}/status" class="toolbar">
+      <input type="text" name="note" placeholder="note" style="flex:1">
+      <button name="status" value="APPROVED" class="primary">Approve</button>
+      <button name="status" value="REJECTED" class="danger">Reject</button>
+      <button name="status" value="QUARANTINED">Quarantine</button>
+      <button name="status" value="PENDING_REVIEW">Back to queue</button>
+    </form>
+    {% if item.flags %}<ul class="flags">{% for f in item.flags %}<li>{{ f }}</li>{% endfor %}</ul>{% endif %}
+    {% if item.restrictions %}<div class="small">{% for k, v in item.restrictions.items() if v not in (None, '', [], {}) %}<span class="chip">{{ k }}: {{ v }}</span> {% endfor %}</div>{% endif %}
+    {% for d in dups %}<div class="small">Possible duplicate: <a href="/admin/items/{{ d.id }}">#{{ d.id }} {{ d.title }}</a> ({{ d.provider }})</div>{% endfor %}
+    <div class="toolbar" style="margin-top:10px">
+      <form class="inline" method="post" action="/admin/items/{{ item.id }}/revalidate"><button>Revalidate sources</button></form>
+      {% if item.provider in ('archive', 'youtube') %}<form class="inline" method="post" action="/admin/items/{{ item.id }}/refresh"><button>Refresh provider metadata</button></form>{% endif %}
+    </div>
+  </div>
+  <div class="panel">
+    <h3 style="margin-top:0">Channels</h3>
+    {% for ci in assigned %}
+      <form class="inline" method="post" action="/admin/items/{{ item.id }}/channels"><input type="hidden" name="channel_id" value="{{ ci.channel_id }}"><input type="hidden" name="role" value="{{ ci.role }}">
+      <span class="chip">{{ ci.channel.name }} · {{ ci.role }}</span> <button name="remove" value="1" class="small">×</button></form>
+    {% else %}<p class="muted small">Not on any channel.</p>{% endfor %}
+    <form method="post" action="/admin/items/{{ item.id }}/channels" class="toolbar" style="margin-top:8px">
+      <select name="channel_id" required>{% for c in channels %}<option value="{{ c.id }}">{{ c.name }}</option>{% endfor %}</select>
+      <select name="role">{% for r in ChannelRole %}<option value="{{ r.value }}">{{ r.value }}</option>{% endfor %}</select>
+      <button>Add</button>
+    </form>
+  </div>
+  <div class="panel">
+    <h3 style="margin-top:0">History</h3>
+    {% for h in history %}<div class="small"><span class="muted">{{ h.at|local }}</span> {{ h.actor }} · {{ h.action }}{% if h.to_status %} {{ h.from_status or '' }} → {{ h.to_status }}{% endif %}{% if h.note %} — {{ h.note }}{% endif %}</div>{% else %}<p class="muted small">No history.</p>{% endfor %}
+  </div>
+</div>
+
+<div>
+  <div class="panel">
+    <h3 style="margin-top:0">Playback sources</h3>
+    <p class="small muted">A programme airs only from a source that is IPTV-ready (or transcodable), rights-authorised and passing health checks. Best eligible source: {% if best %}<b>#{{ best.id }} {{ best.label or best.url or best.local_path }}</b>{% else %}<b>none</b>{% endif %}</p>
+    <table>
+      <tr><th>Source</th><th>Technical</th><th>Rights</th><th></th></tr>
+      {% for ps in item.playback_sources %}
+      <tr>
+        <td class="small"><b>#{{ ps.id }}</b> {{ ps.playback_type }} · prio {{ ps.priority }}<br>{{ ps.label or '' }}<br><code>{{ ps.url or ps.local_path }}</code>{% if ps.license_url %}<br>Licence: <a href="{{ ps.license_url }}" target="_blank" rel="noopener noreferrer">{{ ps.license_url }}</a>{% endif %}</td>
+        <td class="small">{{ elig_chip(ps.eligibility) }}{% if not ps.health_ok %} <span class="chip bad">unhealthy</span>{% endif %}<br>
+          {% if ps.video_codec %}{{ ps.container }} · {{ ps.video_codec }}/{{ ps.audio_codec or 'no audio' }} · {{ ps.width }}×{{ ps.height }} · {{ ps.duration|dur }} · seek: {{ 'yes' if ps.seekable else ('no' if ps.seekable == false else '?') }}{% endif %}
+          {% if ps.last_error %}<br><span class="muted">{{ ps.last_error[:200] }}</span>{% endif %}<br><span class="muted">checked {{ ps.last_validated_at|local }}</span></td>
+        <td class="small">{{ rights_chip(ps.rights_status) }}{% if ps.rights_note %}<br>{{ ps.rights_note }}{% endif %}
+          <form method="post" action="/admin/sources/{{ ps.id }}/rights" style="margin-top:4px">
+            <input type="text" name="note" placeholder="rights note" style="width:100%">
+            {% if ps.playback_type in ('direct_url', 'local_file', 'youtube_stream') %}<button name="rights" value="AUTHORISED">Authorise</button>{% endif %}
+            <button name="rights" value="CATALOGUE_ONLY">Catalogue only</button>
+            <button name="rights" value="RESTRICTED">Restricted</button>
+          </form></td>
+        <td class="small" style="white-space:nowrap">
+          <form class="inline" method="post" action="/admin/sources/{{ ps.id }}/validate"><button>Probe</button></form>
+          <form class="inline" method="post" action="/admin/sources/{{ ps.id }}/delete" onsubmit="return confirm('Remove this playback source?')"><button class="danger">×</button></form>
+        </td>
+      </tr>
+      {% endfor %}
+    </table>
+    <h3>Attach an authorised playback source</h3>
+    <form method="post" action="/admin/items/{{ item.id }}/sources">
+      <div class="fields">
+        <label><span>Type</span><select name="playback_type"><option value="direct_url">Direct media URL / HLS</option><option value="local_file">Local file (media folder)</option></select></label>
+        <label><span>Direct URL (allowlisted host)</span><input type="url" name="url" placeholder="https://…/programme.mp4"></label>
+        <label><span>Local file</span><select name="local_path"><option value="">—</option>{% for f in media_files %}<option>{{ f }}</option>{% endfor %}</select></label>
+        <label><span>Label</span><input type="text" name="label"></label>
+        <label><span>Priority (lower wins)</span><input type="number" name="priority" value="50"></label>
+        <label><span>Rights note (licence, permission, contact)</span><input type="text" name="rights_note"></label>
+      </div>
+      <label class="inline"><input type="checkbox" name="authorise"> I have confirmed redistribution rights — authorise for IPTV</label>
+      <p><button class="primary">Add &amp; validate</button></p>
+      <p class="small muted">YouTube watch/embed URLs and googlevideo endpoints are refused here by design.</p>
+    </form>
+  </div>
+
+  <div class="panel">
+    <h3 style="margin-top:0">Metadata</h3>
+    <form method="post" action="/admin/items/{{ item.id }}">
+      <label>Title<br><input type="text" name="title" value="{{ item.title }}" style="width:100%"></label>
+      <label>Description<br><textarea name="description">{{ item.description or '' }}</textarea></label>
+      <div class="fields">
+        <label><span>Publication date</span><input type="text" name="publication_date" value="{{ item.publication_date or '' }}"></label>
+        <label><span>Duration (seconds or H:MM:SS)</span><input type="text" name="duration" value="{{ item.duration or '' }}"></label>
+        <label><span>Series</span><input type="text" name="series" value="{{ item.series or '' }}"></label>
+        <label><span>Season / episode</span><span style="display:flex;gap:6px"><input type="number" name="season" value="{{ item.season or '' }}"><input type="number" name="episode" value="{{ item.episode or '' }}"></span></label>
+        <label><span>Tags (comma)</span><input type="text" name="tags" value="{{ (item.tags or [])|join(', ') }}"></label>
+        <label><span>Categories (comma)</span><input type="text" name="categories" value="{{ (item.categories or [])|join(', ') }}"></label>
+      </div>
+      <label class="inline"><input type="checkbox" name="artwork_in_epg" {{ 'checked' if item.artwork_in_epg }}> Include artwork in XMLTV</label>
+      {% if item.metadata_locked %}<span class="chip">locked against provider refresh</span>{% endif %}
+      <p><button class="primary">Save metadata</button></p>
+    </form>
+  </div>
+</div>
+</div>
+{% endblock %}

@@ -1,0 +1,38 @@
+# --- Secrets & local config -------------------------------------------------
+.env
+.env.*
+!.env.example
+secrets/
+
+# --- Runtime data (database, generated passwords/keys, cache) ---------------
+data/
+
+# --- Local media library (keep the folder, not the files) -------------------
+media/*
+!media/.gitkeep
+
+# --- Python -----------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# --- Frontend ---------------------------------------------------------------
+node_modules/
+# Built by `npm run build` (and by the Dockerfile's frontend stage)
+archivetv/web/app/
+*.tsbuildinfo
+
+# --- Logs, editors, OS ------------------------------------------------------
+*.log
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db

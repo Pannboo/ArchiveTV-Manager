@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+{% from "_macros.html" import status_chip %}
+{% block content %}
+<h1>Dashboard</h1>
+<div class="grid">
+  <div class="panel"><div class="muted small">Pending review</div><div class="stat"><a href="/admin/review">{{ counts.get('PENDING_REVIEW', 0) }}</a></div></div>
+  <div class="panel"><div class="muted small">Approved</div><div class="stat">{{ counts.get('APPROVED', 0) }}</div></div>
+  <div class="panel"><div class="muted small">Catalogue by provider</div>
+    {% for p, n in by_provider.items() %}<div>{{ provider_labels().get(p, p|title) }}: <b>{{ n }}</b></div>{% else %}<div class="muted">Empty — add a discovery source.</div>{% endfor %}</div>
+  <div class="panel"><div class="muted small">Active streams</div><div class="stat">{{ streams|length }}</div>
+    {% for st in streams %}<div class="small">{{ st.name }} — {{ st.viewers }} viewer(s), {{ st.mode }}</div>{% endfor %}
+    {% if catchups %}<div class="small"><a href="/admin/catchup">{{ catchups|length }} catch-up session(s)</a></div>{% endif %}</div>
+  <div class="panel"><div class="muted small">Unavailable sources / failures (24h)</div><div class="stat">{{ unavailable }} / {{ failures_24h }}</div></div>
+</div>
+
+{% for a in res.alerts %}<div class="flash error">Resource alert: {{ a }}</div>{% endfor %}
+<div class="panel small">
+  <b>Resources</b> ·
+  CPU {{ res.cpu_percent if res.cpu_percent is not none else '—' }}% of a core ·
+  memory {{ ((res.memory.cgroup_used or res.memory.process_rss) / 1048576)|round|int }} MB{% if res.memory.cgroup_limit %} of {{ (res.memory.cgroup_limit / 1048576)|round|int }} MB{% endif %}
+  (FFmpeg {{ (res.ffmpeg_rss_bytes / 1048576)|round|int }} MB, {{ res.ffmpeg_processes }} process{{ 'es' if res.ffmpeg_processes != 1 }}) ·
+  stream buffers {{ ((res.buffers.queued_bytes + res.buffers.keyframe_cache_bytes) / 1048576)|round(1) }} MB in RAM ·
+  database {{ (res.database_bytes / 1048576)|round(1) }} MB ·
+  temp {{ res.tmp.percent }}% ·
+  {% if res.minimal_disk %}<span class="chip ok">minimal-disk: no media written</span>{% else %}<span class="chip warn">disk cache allowed</span>{% endif %}
+</div>
+
+<h2>Channels</h2>
+<div class="panel">
+<table>
+  <tr><th>#</th><th>Channel</th><th>On now</th><th>Next</th><th>Eligible programmes</th><th>Scheduled until</th></tr>
+  {% for r in chan_rows %}
+  <tr>
+    <td>{{ r.ch.number or '' }}</td>
+    <td><a href="/admin/channels/{{ r.ch.id }}">{{ r.ch.name }}</a> {% if not r.ch.enabled %}<span class="chip">disabled</span>{% endif %}<div class="small muted"><code>{{ r.ch.slug }}</code></div></td>
+    <td>{% if r.cur %}{{ r.cur.title }}<div class="small muted">{{ r.cur.start|local('%H:%M') }}–{{ r.cur.end|local('%H:%M') }} · {{ r.cur.kind }}</div>{% else %}<span class="muted">—</span>{% endif %}</td>
+    <td>{% if r.next %}{{ r.next.title }}<div class="small muted">{{ r.next.start|local('%H:%M') }}</div>{% endif %}</td>
+    <td>{% if r.eligible %}{{ r.eligible }}{% else %}<span class="chip bad">none — off air</span>{% endif %}</td>
+    <td>{{ r.horizon|local }}</td>
+  </tr>
+  {% else %}<tr><td colspan="6" class="muted">No channels yet. <a href="/admin/channels">Create one</a>.</td></tr>{% endfor %}
+</table>
+</div>
+
+<div class="grid">
+<div class="panel">
+  <h3>Providers</h3>
+  <table>
+  {% for p in providers %}
+  <tr><td><b>{{ p.label }}</b>{% if not p.info.configured %} <span class="chip bad">not configured</span>{% endif %}{% if p.info.unofficial %} <span class="chip warn" title="ytscrape: YouTube's private API, used until an API key is added">unofficial (no key)</span>{% endif %}</td>
+    <td class="small">
+      Last success: {{ p.st.last_success_at|local if p.st else '—' }}<br>
+      {% if p.st and p.st.last_error %}<span class="chip bad">error</span> {{ p.st.last_error_at|local }} — {{ p.st.last_error[:160] }}<br>{% endif %}
+      {% if p.info.quota_limit is defined %}Quota today: {{ p.info.quota_used }} / {{ p.info.quota_limit }} units{% endif %}
+    </td></tr>
+  {% endfor %}
+  </table>
+</div>
+<div class="panel">
+  <h3>Recent discovery</h3>
+  <table>
+  {% for r in rules %}<tr><td>{{ r.name }}<div class="small muted">{{ r.provider }} · {{ r.kind }}</div></td>
+    <td class="small">{{ r.last_run_at|local }}<br>{% if r.last_status == 'error' %}<span class="chip bad">error</span>{% elif r.last_status %}<span class="chip ok">{{ r.last_status }}</span>{% endif %} {{ r.last_new_count }} new</td></tr>
+  {% else %}<tr><td class="muted">No discovery rules. <a href="/admin/discovery">Add one</a>.</td></tr>{% endfor %}
+  </table>
+</div>
+<div class="panel">
+  <h3>Recent playback errors</h3>
+  {% for e in events %}<div class="small"><span class="muted">{{ e.at|local }}</span> {{ e.message }}</div>{% else %}<div class="muted small">None.</div>{% endfor %}
+</div>
+</div>
+<p class="small muted">Background jobs last ran: {% for k, v in jobs.items() %}{{ k }} {{ v[11:16] }}Z{% if not loop.last %}, {% endif %}{% else %}not yet{% endfor %}. Times shown in {{ tz_name() }}.</p>
+{% endblock %}

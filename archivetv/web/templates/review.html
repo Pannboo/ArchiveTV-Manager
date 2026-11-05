@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+{% from "_macros.html" import status_chip, elig_chip, rights_chip, iptv_chip, preview %}
+{% block content %}
+<h1>Review queue <span class="muted small">{{ total }} item(s)</span></h1>
+<form method="get" class="toolbar">
+  <select name="status">{% for st in ReviewStatus %}<option value="{{ st.value }}" {{ 'selected' if status == st.value }}>{{ st.value.replace('_',' ').lower() }}</option>{% endfor %}<option value="" {{ 'selected' if not status }}>all</option></select>
+  <select name="provider"><option value="">all providers</option>{% for k, v in provider_labels().items() %}<option value="{{ k }}" {{ 'selected' if provider == k }}>{{ v }}</option>{% endfor %}<option value="local" {{ 'selected' if provider == 'local' }}>Local</option></select>
+  <input type="text" name="q" value="{{ q or '' }}" placeholder="search">
+  <button>Filter</button>
+</form>
+
+<form method="post" action="/admin/review/bulk" id="bulk">
+<div class="panel">
+  <div class="toolbar">
+    <label class="inline"><input type="checkbox" onclick="document.querySelectorAll('input[name=ids]').forEach(c=>c.checked=this.checked)"> all</label>
+    <button name="action" value="approve" class="primary">Approve</button>
+    <button name="action" value="reject" class="danger">Reject</button>
+    <button name="action" value="quarantine">Quarantine</button>
+    <button name="action" value="authorise" title="Mark validated IPTV-capable sources as rights-cleared">Authorise IPTV rights</button>
+    <button name="action" value="catalogue_only">Catalogue only</button>
+    <button name="action" value="revalidate">Revalidate</button>
+    <select name="channel_id"><option value="">— channel —</option>{% for c in channels %}<option value="{{ c.id }}">{{ c.name }}</option>{% endfor %}</select>
+    <button name="action" value="assign">Assign to channel</button>
+    <input type="text" name="note" placeholder="note (kept in history)" style="flex:1;min-width:160px">
+  </div>
+  <p class="small muted">Approval and IPTV rights are separate: approving lists an item; it can only air once one of its playback sources is technically validated <em>and</em> rights-authorised.</p>
+
+  {% for item in items %}
+  <div class="review-card">
+    <div><input type="checkbox" name="ids" value="{{ item.id }}"></div>
+    <div class="media">{{ preview(item) }}</div>
+    <div class="meta">
+      <div><a href="/admin/items/{{ item.id }}"><b>{{ item.title }}</b></a></div>
+      <div class="small muted">
+        {{ provider_labels().get(item.provider, item.provider|title) }} · {{ item.source.creator or 'unknown creator' }} · {{ item.publication_date or 'no date' }} · {{ item.duration|dur }}
+        {% if item.source.original_url %}· <a href="{{ item.source.original_url }}" target="_blank" rel="noopener noreferrer">source</a>{% endif %}
+      </div>
+      <div style="margin:4px 0">{{ status_chip(item.review_status) }} {{ elig_chip(item_eligibility(item)) }} {{ iptv_chip(item) }}</div>
+      {% if item.flags %}<ul class="flags">{% for f in item.flags %}<li>{{ f }}</li>{% endfor %}</ul>{% endif %}
+      {% set r = item.restrictions or {} %}
+      {% if item.provider == 'youtube' %}
+      <div class="small">Embeddable: <b>{{ 'yes' if r.embeddable else 'no' }}</b> · Privacy: {{ r.privacy_status }} · Live: {{ r.live_broadcast }}{% if r.age_restricted %} · <span class="chip bad">age-restricted</span>{% endif %}{% if r.region_restriction %} · region: {{ r.region_restriction }}{% endif %}</div>
+      {% endif %}
+      {% if item.description %}<div class="desc">{{ item.description[:800] }}</div>{% endif %}
+      <div class="small" style="margin-top:6px">
+        {% for ps in item.playback_sources %}{% if ps.playback_type in ('direct_url', 'local_file', 'youtube_stream') %}
+          <div>{{ elig_chip(ps.eligibility) }} {{ rights_chip(ps.rights_status) }} {{ ps.label or ps.url }} {% if ps.video_codec %}<span class="muted">{{ ps.video_codec }}/{{ ps.audio_codec }} {{ ps.width }}×{{ ps.height }}</span>{% endif %}{% if ps.last_error %} <span class="muted">— {{ ps.last_error[:120] }}</span>{% endif %}</div>
+        {% endif %}{% endfor %}
+      </div>
+    </div>
+  </div>
+  {% else %}
+  <p class="muted">Nothing here. Run a discovery rule or import a URL.</p>
+  {% endfor %}
+</div>
+</form>
+<div class="pager">
+  {% if page > 1 %}<a class="btn" href="?status={{ status }}&provider={{ provider or '' }}&q={{ q or '' }}&page={{ page-1 }}">← Prev</a>{% endif %}
+  <span class="muted">Page {{ page }} / {{ pages }}</span>
+  {% if page < pages %}<a class="btn" href="?status={{ status }}&provider={{ provider or '' }}&q={{ q or '' }}&page={{ page+1 }}">Next →</a>{% endif %}
+</div>
+{% endblock %}

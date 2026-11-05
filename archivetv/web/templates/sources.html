@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% from "_macros.html" import elig_chip, rights_chip %}
+{% block content %}
+<h1>Playback sources</h1>
+<form method="get" class="toolbar">
+  <select name="ptype"><option value="">any type</option>{% for t in PlaybackType %}<option value="{{ t.value }}" {{ 'selected' if ptype == t.value }}>{{ t.value }}</option>{% endfor %}</select>
+  <select name="rights"><option value="">any rights</option>{% for r in RightsStatus %}<option value="{{ r.value }}" {{ 'selected' if rights == r.value }}>{{ r.value.lower() }}</option>{% endfor %}</select>
+  <select name="eligibility"><option value="">any eligibility</option>{% for e in Eligibility %}<option value="{{ e.value }}" {{ 'selected' if eligibility == e.value }}>{{ e.value.lower() }}</option>{% endfor %}</select>
+  <label class="inline"><input type="checkbox" name="unhealthy" value="1" {{ 'checked' if unhealthy }}> failing health checks</label>
+  <button>Filter</button>
+</form>
+
+<div class="panel">
+<table>
+  <tr><th>Item</th><th>Source</th><th>Technical</th><th>Rights</th><th>Priority / cache</th><th></th></tr>
+  {% for ps in rows %}
+  <tr>
+    <td class="small"><a href="/admin/items/{{ ps.media_item_id }}">{{ ps.media_item.title[:70] }}</a><br><span class="muted">{{ ps.media_item.provider }}</span></td>
+    <td class="small">{{ ps.playback_type }}<br><code>{{ (ps.url or ps.local_path or '')[:90] }}</code></td>
+    <td class="small">{{ elig_chip(ps.eligibility) }}{% if not ps.health_ok %} <span class="chip bad">unhealthy</span>{% endif %}<br>{{ ps.video_codec or '' }} {{ ps.height or '' }}{{ 'p' if ps.height }} {{ ps.duration|dur }}{% if ps.last_error %}<br><span class="muted">{{ ps.last_error[:100] }}</span>{% endif %}</td>
+    <td class="small">{{ rights_chip(ps.rights_status) }}</td>
+    <td class="small"><form method="post" action="/admin/sources/{{ ps.id }}/update" class="toolbar"><input type="number" name="priority" value="{{ ps.priority }}" style="width:70px"><label class="inline"><input type="checkbox" name="allow_cache" {{ 'checked' if ps.allow_cache }}> cache</label><button>Save</button></form></td>
+    <td><form class="inline" method="post" action="/admin/sources/{{ ps.id }}/validate"><button>Probe</button></form></td>
+  </tr>
+  {% else %}<tr><td colspan="6" class="muted">No sources match.</td></tr>{% endfor %}
+</table>
+</div>
+
+<div class="panel">
+  <h2 style="margin-top:0">Import local files</h2>
+  <p class="small muted">Files in the media folder: station idents, filler clips, or rights-holder masters. To attach a file to an existing catalogue item (e.g. one discovered on YouTube), open that item and use "Attach an authorised playback source".</p>
+  <form method="post" action="/admin/local/import">
+    <div style="max-height:260px;overflow:auto;border:1px solid var(--line);border-radius:6px;padding:6px">
+      {% for f in media_files %}<label class="small"><input type="checkbox" name="paths" value="{{ f }}"> {{ f }}</label>{% else %}<span class="muted small">The media folder is empty.</span>{% endfor %}
+    </div>
+    <div class="toolbar" style="margin-top:8px">
+      <label class="inline"><input type="checkbox" name="approve"> Approve now</label>
+      <label class="inline"><input type="checkbox" name="authorise"> I hold usage rights — authorise for IPTV</label>
+      <select name="channel_id"><option value="">— add to channel —</option>{% for c in channels %}<option value="{{ c.id }}">{{ c.name }}</option>{% endfor %}</select>
+      <select name="role">{% for r in ChannelRole %}<option value="{{ r.value }}">{{ r.value }}</option>{% endfor %}</select>
+      <button class="primary">Import selected</button>
+    </div>
+  </form>
+</div>
+{% endblock %}

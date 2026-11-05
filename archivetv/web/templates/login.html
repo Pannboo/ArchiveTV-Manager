@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="panel login">
+  <h1>ArchiveTV Manager</h1>
+  <form method="post" action="/login">
+    <input type="hidden" name="next" value="{{ next }}">
+    <label>Username<br><input type="text" name="username" autocomplete="username" required autofocus></label>
+    <label>Password<br><input type="password" name="password" autocomplete="current-password" required></label>
+    <p><button class="primary">Sign in</button></p>
+  </form>
+</div>
+{% endblock %}

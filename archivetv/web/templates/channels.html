@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Channels</h1>
+<div class="panel">
+<table>
+  <tr><th>#</th><th>Name</th><th>Channel ID</th><th>TVG ID</th><th>Group</th><th>Mode</th><th>Items</th><th>Output</th></tr>
+  {% for c in channels %}
+  <tr>
+    <td>{{ c.number or '' }}</td>
+    <td><a href="/admin/channels/{{ c.id }}">{{ c.name }}</a> {% if not c.enabled %}<span class="chip">disabled</span>{% endif %}</td>
+    <td><code>{{ c.slug }}</code></td><td><code>{{ c.tvg_id }}</code></td><td>{{ c.group_title }}</td><td>{{ c.mode }}</td>
+    <td>{{ c.items|length }}</td><td>{{ c.playback_format }}</td>
+  </tr>
+  {% else %}<tr><td colspan="8" class="muted">No channels yet.</td></tr>{% endfor %}
+</table>
+</div>
+<div class="panel">
+  <h2 style="margin-top:0">New channel</h2>
+  <form method="post" action="/admin/channels">
+    <div class="fields">
+      <label><span>Name</span><input type="text" name="name" required placeholder="Retro Television"></label>
+      <label><span>Channel ID (stable, used in stream URL)</span><input type="text" name="slug" required pattern="[a-z0-9][a-z0-9-]*" placeholder="retro-tv"></label>
+      <label><span>TVG ID (optional)</span><input type="text" name="tvg_id" placeholder="retro-tv.archivetv"></label>
+      <label><span>Number</span><input type="number" name="number"></label>
+      <label><span>Group</span><input type="text" name="group_title" value="ArchiveTV"></label>
+      <label><span>Mode</span><select name="mode">{% for m in ScheduleMode %}<option value="{{ m.value }}">{{ m.value }}</option>{% endfor %}</select></label>
+      <label><span>Output</span><select name="playback_format">{% for f in PlaybackFormat %}<option value="{{ f.value }}">{{ f.value }}</option>{% endfor %}</select></label>
+    </div>
+    <p><button class="primary">Create channel</button></p>
+  </form>
+  <p class="small muted">Channel ID and TVG ID stay fixed once Dispatcharr has imported them, so your Dispatcharr customisations keep matching.</p>
+</div>
+{% endblock %}

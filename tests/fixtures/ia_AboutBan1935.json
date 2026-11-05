@@ -1,0 +1,354 @@
+{
+ "metadata": {
+  "identifier": "AboutBan1935",
+  "title": "About Bananas",
+  "creator": "Castle Films",
+  "description": "Complete presentation of the banana industry from the clearing of the jungle and the planting to the shipment of the fruit to the American markets.",
+  "date": "1935",
+  "licenseurl": "http://creativecommons.org/licenses/publicdomain/",
+  "subject": "Agriculture: Bananas;Central America",
+  "collection": "prelinger",
+  "runtime": "11:03",
+  "mediatype": "movies"
+ },
+ "files": [
+  {
+   "name": "AboutBan1935.asr.js",
+   "source": "original",
+   "format": "Unknown",
+   "size": "4279"
+  },
+  {
+   "name": "AboutBan1935.asr.srt",
+   "source": "original",
+   "format": "SubRip",
+   "size": "0"
+  },
+  {
+   "name": "AboutBan1935.avi",
+   "source": "original",
+   "format": "Cinepack",
+   "length": "664.29",
+   "size": "38496262",
+   "width": "320",
+   "height": "240"
+  },
+  {
+   "name": "AboutBan1935.gif",
+   "source": "derivative",
+   "format": "Animated GIF",
+   "original": "AboutBan1935.mpeg",
+   "size": "259573"
+  },
+  {
+   "name": "AboutBan1935.mp3",
+   "source": "derivative",
+   "format": "MP3",
+   "original": "AboutBan1935.mpeg",
+   "length": "11:03",
+   "size": "5308416",
+   "width": "0",
+   "height": "0"
+  },
+  {
+   "name": "AboutBan1935.mp4",
+   "source": "derivative",
+   "format": "h.264",
+   "original": "AboutBan1935.mpeg",
+   "length": "664.03",
+   "size": "68512128",
+   "width": "640",
+   "height": "480"
+  },
+  {
+   "name": "AboutBan1935.mpeg",
+   "source": "original",
+   "format": "MPEG2",
+   "length": "663.99",
+   "size": "306617225",
+   "width": "640",
+   "height": "480"
+  },
+  {
+   "name": "AboutBan1935.ogv",
+   "source": "derivative",
+   "format": "Ogg Video",
+   "original": "AboutBan1935.mpeg",
+   "length": "664.03",
+   "size": "46417991",
+   "width": "400",
+   "height": "304"
+  },
+  {
+   "name": "AboutBan1935.pack-car.log",
+   "source": "derivative",
+   "format": "Content Addressable aRchive Log",
+   "original": "AboutBan1935.pack-car.trigger",
+   "size": "0"
+  },
+  {
+   "name": "AboutBan1935.pack-car.trigger",
+   "source": "original",
+   "format": "Content Addressable aRchive Trigger",
+   "size": "0"
+  },
+  {
+   "name": "AboutBan1935.png",
+   "source": "derivative",
+   "format": "PNG",
+   "original": "AboutBan1935.mp3",
+   "size": "3072"
+  },
+  {
+   "name": "AboutBan1935.thumbs/AboutBan1935_000001.jpg",
+   "source": "derivative",
+   "format": "Thumbnail",
+   "original": "AboutBan1935.mpeg",
+   "size": "1382"
+  },
+  {
+   "name": "AboutBan1935.thumbs/AboutBan1935_000030.jpg",
+   "source": "derivative",
+   "format": "Thumbnail",
+   "original": "AboutBan1935.mpeg",
+   "size": "6020"
+  },
+  {
+   "name": "AboutBan1935.thumbs/AboutBan1935_000060.jpg",
+   "source": "derivative",
+   "format": "Thumbnail",
+   "original": "AboutBan1935.mpeg",
+   "size": "4349"
+  },
+  {
+   "name": "AboutBan1935.thumbs/AboutBan1935_000090.jpg",
+   "source": "derivative",
+   "format": "Thumbnail",
+   "original": "AboutBan1935.mpeg",
+   "size": "3545"
+  },
+  {
+   "name": "AboutBan1935.thumbs/AboutBan1935_000120.jpg",
+   "source": "derivative",
+   "format": "Thumbnail",
+   "original": "AboutBan1935.mpeg",
+   "size": "8060"
+  },
+  {
+   "name": "AboutBan1935.thumbs/AboutBan1935_000150.jpg",
+   "source": "derivative",
+   "format": "Thumbnail",
+   "original": "AboutBan1935.mpeg",
+   "size": "8430"
+  },
+  {
+   "name": "AboutBan1935.thumbs/AboutBan1935_000180.jpg",
+   "source": "derivative",
+   "format": "Thumbnail",
+   "original": "AboutBan1935.mpeg",
+   "size": "6204"
+  },
+  {
+   "name": "AboutBan1935.thumbs/AboutBan1935_000210.jpg",
+   "source": "derivative",
+   "format": "Thumbnail",
+   "original": "AboutBan1935.mpeg",
+   "size": "7161"
+  },
+  {
+   "name": "AboutBan1935.thumbs/AboutBan1935_000240.jpg",
+   "source": "derivative",
+   "format": "Thumbnail",
+   "original": "AboutBan1935.mpeg",
+   "size": "8978"
+  },
+  {
+   "name": "AboutBan1935.thumbs/AboutBan1935_000270.jpg",
+   "source": "derivative",
+   "format": "Thumbnail",
+   "original": "AboutBan1935.mpeg",
+   "size": "8827"
+  },
+  {
+   "name": "AboutBan1935.thumbs/AboutBan1935_000300.jpg",
+   "source": "derivative",
+   "format": "Thumbnail",
+   "original": "AboutBan1935.mpeg",
+   "size": "9255"
+  },
+  {
+   "name": "AboutBan1935.thumbs/AboutBan1935_000330.jpg",
+   "source": "derivative",
+   "format": "Thumbnail",
+   "original": "AboutBan1935.mpeg",
+   "size": "9122"
+  },
+  {
+   "name": "AboutBan1935.thumbs/AboutBan1935_000360.jpg",
+   "source": "derivative",
+   "format": "Thumbnail",
+   "original": "AboutBan1935.mpeg",
+   "size": "6183"
+  },
+  {
+   "name": "AboutBan1935.thumbs/AboutBan1935_000390.jpg",
+   "source": "derivative",
+   "format": "Thumbnail",
+   "original": "AboutBan1935.mpeg",
+   "size": "6702"
+  },
+  {
+   "name": "AboutBan1935.thumbs/AboutBan1935_000420.jpg",
+   "source": "derivative",
+   "format": "Thumbnail",
+   "original": "AboutBan1935.mpeg",
+   "size": "5704"
+  },
+  {
+   "name": "AboutBan1935.thumbs/AboutBan1935_000450.jpg",
+   "source": "derivative",
+   "format": "Thumbnail",
+   "original": "AboutBan1935.mpeg",
+   "size": "4347"
+  },
+  {
+   "name": "AboutBan1935.thumbs/AboutBan1935_000480.jpg",
+   "source": "derivative",
+   "format": "Thumbnail",
+   "original": "AboutBan1935.mpeg",
+   "size": "3518"
+  },
+  {
+   "name": "AboutBan1935.thumbs/AboutBan1935_000510.jpg",
+   "source": "derivative",
+   "format": "Thumbnail",
+   "original": "AboutBan1935.mpeg",
+   "size": "5185"
+  },
+  {
+   "name": "AboutBan1935.thumbs/AboutBan1935_000540.jpg",
+   "source": "derivative",
+   "format": "Thumbnail",
+   "original": "AboutBan1935.mpeg",
+   "size": "3308"
+  },
+  {
+   "name": "AboutBan1935.thumbs/AboutBan1935_000570.jpg",
+   "source": "derivative",
+   "format": "Thumbnail",
+   "original": "AboutBan1935.mpeg",
+   "size": "3935"
+  },
+  {
+   "name": "AboutBan1935.thumbs/AboutBan1935_000600.jpg",
+   "source": "derivative",
+   "format": "Thumbnail",
+   "original": "AboutBan1935.mpeg",
+   "size": "2366"
+  },
+  {
+   "name": "AboutBan1935.thumbs/AboutBan1935_000630.jpg",
+   "source": "derivative",
+   "format": "Thumbnail",
+   "original": "AboutBan1935.mpeg",
+   "size": "6288"
+  },
+  {
+   "name": "AboutBan1935.thumbs/AboutBan1935_000660.jpg",
+   "source": "derivative",
+   "format": "Thumbnail",
+   "original": "AboutBan1935.mpeg",
+   "size": "6881"
+  },
+  {
+   "name": "AboutBan1935.transmit-car-boost.log",
+   "source": "original",
+   "format": "CAR Transmit Log (Boost)",
+   "size": "1356"
+  },
+  {
+   "name": "AboutBan1935.transmit-car-offline.log",
+   "source": "original",
+   "format": "CAR Transmit Log (Offline)",
+   "size": "383"
+  },
+  {
+   "name": "AboutBan1935.xml",
+   "source": "original",
+   "format": "Metadata",
+   "size": "2161"
+  },
+  {
+   "name": "AboutBan1935_256kb.rm",
+   "source": "original",
+   "format": "256Kb Real Media",
+   "length": "665.01",
+   "size": "116127544",
+   "width": "320",
+   "height": "240"
+  },
+  {
+   "name": "AboutBan1935_512kb.mp4",
+   "source": "derivative",
+   "format": "512Kb MPEG4",
+   "original": "AboutBan1935.mpeg",
+   "length": "664.03",
+   "size": "45941165",
+   "width": "320",
+   "height": "240"
+  },
+  {
+   "name": "AboutBan1935_64kb.rm",
+   "source": "original",
+   "format": "64Kb Real Media",
+   "length": "665.49",
+   "size": "48764199",
+   "width": "160",
+   "height": "120"
+  },
+  {
+   "name": "AboutBan1935_archive.torrent",
+   "source": "metadata",
+   "format": "Archive BitTorrent",
+   "size": "38672"
+  },
+  {
+   "name": "AboutBan1935_edit.mp4",
+   "source": "original",
+   "format": "HiRes MPEG4",
+   "length": "663.89",
+   "size": "211573767",
+   "width": "320",
+   "height": "240"
+  },
+  {
+   "name": "AboutBan1935_files.xml",
+   "source": "metadata",
+   "format": "Metadata"
+  },
+  {
+   "name": "AboutBan1935_meta.sqlite",
+   "source": "original",
+   "format": "Metadata",
+   "size": "20480"
+  },
+  {
+   "name": "AboutBan1935_meta.xml",
+   "source": "metadata",
+   "format": "Metadata",
+   "size": "2716"
+  },
+  {
+   "name": "AboutBan1935_reviews.xml",
+   "source": "original",
+   "format": "Metadata",
+   "size": "11593"
+  },
+  {
+   "name": "__ia_thumb.jpg",
+   "source": "original",
+   "format": "Item Tile",
+   "size": "7280"
+  }
+ ]
+}
