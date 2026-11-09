@@ -1,185 +1,121 @@
-# Plan — Curated creator channels over IPTV
+# Plan — Link-to-channel: YouTube, Twitch and Archive over IPTV
 
 ArchiveTV Manager 2.x · draft, 9 November 2026 · status: **proposal, nothing built yet**
 
 ## Goal
 
-Build an open-source equivalent of the react.tv idea: people curate web video (YouTube, Twitch, Internet Archive) into 24/7 channels, and everyone watching a channel sees the same moment. Optionally, a creator can react live, shown beside the scheduled video.
+An open-source take on the react.tv idea, delivered as IPTV:
 
-**The hard requirement:** every channel must play as a normal IPTV channel through Dispatcharr (Xtream Codes, live + catch-up), just like today's ArchiveTV channels. A web player is a companion, not the delivery path.
+> **Paste a link → it goes to the streaming engine → it plays on a 24/7 channel in Dispatcharr.**
+
+A link can be:
+- a **YouTube video** (or a YouTube channel's `/live` address)
+- a **Twitch stream** (a channel that's live now) or a **Twitch VOD / clip**
+- an **Internet Archive** item
+
+Everyone watching a channel sees the same moment, as on any TV channel.
+
+**In scope:** link import, playback of all three sources through the existing FFmpeg engine, channel playlists, and delivery through Dispatcharr (Xtream Codes, EPG, catch-up where possible).
+
+**Not in scope:** reactions, camera ingest, chat, or anyone going live *through* ArchiveTV. A Twitch or YouTube live stream is only ever something we *play*, never something we host.
 
 ## What already exists
 
-Most of the pipeline is already built and verified (see `PHASE0_FEASIBILITY.md`):
-
 | Need | Already in ArchiveTV |
 |---|---|
-| Discover and import videos | `providers/archive.py`, `providers/youtube.py`, discovery rules, *Import* by URL |
-| Human approval and rights gate | `MediaItem.review_status`, `PlaybackSource.rights_status`, `catalogue.source_is_iptv_ok` |
-| Deterministic 24/7 schedule | `scheduler.py` (sequential / shuffle / time blocks, fallback, failover) |
-| "Everyone in sync" | Inherent: one shared FFmpeg pipeline per channel, locked to the wall-clock schedule (`stream.ChannelStream`) |
-| IPTV delivery + EPG + catch-up | `xtream.py`, `feeds.py`, `catchup.py` |
-| YouTube videos airing over IPTV | Experimental `youtube_stream` source: yt-dlp resolves at play time, FFmpeg gets a video + audio pair (`ytstream.py`, `stream._cmd`) |
-| YouTube Live as a source | Live sources: joined at the live edge, block-filling, offline fallback, never in catch-up |
+| Archive links → playback | `providers/archive.py` + `direct_url` sources, verified end to end (`PHASE0_FEASIBILITY.md`) |
+| YouTube links → playback | Experimental `youtube_stream` source, behind `ATV_YOUTUBE_STREAMING`: yt-dlp resolves at play time and FFmpeg gets a video + audio pair (`ytstream.py`, `stream._cmd`) |
+| YouTube live → playback | Live sources: joined at the live edge, fill their time block, fall back when offline, rechecked every minute, not in catch-up |
+| Import by URL | *Import* in the admin UI (`POST /api/v1/...` import routes) |
+| 24/7 schedule, everyone in sync | `scheduler.py` + one shared `ChannelStream` per channel |
+| IPTV delivery | `xtream.py`, `feeds.py`, `catchup.py` |
 
-**The gaps:** Twitch, a fast "curate a channel from a list of links" flow, a web companion with chat, reaction programmes (compositing two feeds), and more than one curator.
+**The gaps:**
+1. Twitch can't be played at all.
+2. Getting a link on air takes several screens: import, review, approve, authorise rights, assign to a channel.
 
-## The rights question (read first)
+## Phase 1 — Twitch playback
 
-react.tv is legitimate largely because it **embeds** the official players, so views, ads and analytics go back to the creator. IPTV can't do that. Airing a YouTube or Twitch video over IPTV means **re-streaming** it, and both platforms' terms forbid that without the rights holder's permission.
+**Outcome:** a Twitch link plays on a channel exactly like a YouTube stream source does today.
 
-This plan keeps ArchiveTV's existing rule: nothing airs until an admin has approved the item **and** explicitly marked its source `AUTHORISED`. The realistic sources for IPTV are:
-- your own channels and VODs
-- creators who opt in, ideally recorded as written permission in `rights_note` / `license_url`
-- Creative Commons and public-domain material (Internet Archive)
+1. **One resolver layer for "page URL → stream URL":** move `ytstream.py` into `archivetv/resolvers/`.
+   - `base.py` holds the `Resolved` dataclass (video, optional audio, user agent, codecs, height, duration, `live`, expiry) and a small interface: `matches(url)`, `cache_key(url)`, `resolve(url, fresh)`, `forget(url)`.
+   - `youtube.py` is today's code, moved without behaviour changes.
+   - `twitch.py` is new and uses yt-dlp's Twitch extractors (already a dependency).
+   - `validator.playable_target` and `stream._resolve` / `_handle_failure` look the resolver up by playback type instead of special-casing YouTube.
+2. **Enums:**
+   - `PlaybackType.TWITCH_STREAM`, `ProviderType.TWITCH`
+   - add the new type to `catalogue.IPTV_TYPES`
+   - a toggle, `ATV_TWITCH_STREAMING` (and a Settings switch), like YouTube's
+3. **Which Twitch links work:**
 
-The web companion (Phase 4) can still use the official embeds for everything, which is the react.tv model.
+   | Link | Becomes | Schedule behaviour | Catch-up |
+   |---|---|---|---|
+   | `twitch.tv/<login>` | live item that follows whatever the channel is broadcasting | fills its time block, or hourly slots on a channel with nothing else; off-air fallback when they're offline | no (live is never recorded) |
+   | `twitch.tv/videos/<id>` | VOD with a fixed length | like any programme | yes, while the VOD still exists |
+   | `clips.twitch.tv/…` / `twitch.tv/<login>/clip/…` | short clip | programme or filler | yes |
 
-Recommendation: keep YouTube and Twitch streaming opt-in (`ATV_YOUTUBE_STREAMING`, a new `ATV_TWITCH_STREAMING`), and add a per-source "permission evidence" field before calling any of this production-ready.
+4. **Twitch-specific handling:**
+   - **One input:** Twitch HLS carries audio and video together, so `audio=None`. VODs are normally H.264 + AAC, which can be remuxed (`IPTV_READY`, cheap).
+   - **Ads on live streams:** Twitch inserts mid-roll ads that change resolution and break timestamps. Force `transcode` for Twitch live sources so the MPEG-TS output stays continuous for Dispatcharr. VODs keep the cheap remux.
+   - **Stream hosts:** live comes from `usher.ttvnw.net` / `*.hls.ttvnw.net`. VODs and clips use CDN domains that vary. Vet them against a Twitch host list, like `ytstream.STREAM_HOSTS`, and log any refused host so the list can be updated.
+   - **VODs expire** after 7–60 days. The existing health check takes the source out of rotation, and the schedule fails over to the next item.
+   - **Not done:** no logins, cookies or OAuth user tokens, so subscriber-only and age-gated content simply doesn't play. No ad blocking or bot-check workarounds. This is the same policy as YouTube.
+5. **Live recheck:** the existing one-minute live-recheck job covers Twitch live items. When the channel goes live, the schedule picks it up automatically.
+6. **Tests:**
+   - resolver tests with a mocked yt-dlp `extract_info` (the pattern is `tests/test_ytstream.py`)
+   - a `stream._cmd` test for the single-input transcode path
+   - one real capture through Dispatcharr: 0 backwards timestamps, 0 gaps, 0 decode errors
 
----
+## Phase 2 — "Paste a link, put it on a channel"
 
-## Phase 1 — Generic stream resolvers + Twitch playback
+**Outcome:** one action gets a link on air.
 
-**Outcome:** a Twitch VOD, clip or live channel can be approved, authorised and aired over IPTV exactly like a YouTube stream source today.
+- **Add link** box on each channel page, plus the API: `POST /api/v1/channels/{id}/links` with `{url, role, position}`. It accepts a single link or a list.
+  1. It works out the provider from the URL (YouTube, Twitch or Archive). Anything else is rejected, still checked by `security.py`.
+  2. It imports metadata: title, duration, thumbnail. This works without API keys: yt-dlp metadata for YouTube and Twitch, the metadata API for Archive.
+  3. It validates the source with FFprobe, using the resolver.
+  4. If validation passes, it **approves the item, authorises the source and adds it to the channel** in one step. The schedule is then extended from the next free slot, so the item airs without a rebuild.
+  5. It returns per-link status: `on_air_queued`, `failed: <reason>` or `live_offline`.
+- **Approval and rights become one confirmation instead of three screens.** The admin is the person pasting the link, so the paste counts as approval. A **checkbox on the form** ("I have permission to rebroadcast this") is still required, and is recorded in the audit log. YouTube and Twitch terms don't allow re-streaming without the creator's permission, so ArchiveTV should keep that record, even though it no longer blocks the workflow.
+  - The existing review queue and discovery rules stay as they are for bulk discovery. The link flow is a fast lane beside them.
+- **Playlist order:** links play in the order added (sequential mode), with drag-to-reorder backed by `ChannelItem.position`. There is also a choice between **loop the list** and **play once, then the fallback programme**.
+- **Play at a set time:** an optional "start at 20:00" on a link inserts it at that time and moves the rest of the schedule later. `scheduler.override` exists today for replacing an entry; it gets an insert variant.
+- **Live links:** a Twitch or YouTube live link can be given a time block (e.g. "every day 20:00–23:00"). Otherwise, on a channel with nothing else, it runs around the clock while live, and the channel shows the fallback or "off air" when it isn't.
+- **Guide length:** `ATV_SCHEDULE_DAYS` already exists; allow up to 14.
 
-1. **Generalise `ytstream.py` into `archivetv/resolvers/`:**
-   - `base.py` defines a `Resolved` dataclass (video, optional audio, user agent, codecs, height, duration, `live`, expiry) and a `StreamResolver` interface: `matches(url)`, `cache_key(url)`, `resolve(url, fresh)`, `forget(url)`.
-   - `youtube.py` holds today's code, moved without behaviour changes.
-   - `twitch.py` is new and uses yt-dlp's Twitch extractors, so no new dependency is needed.
-   - `validator.playable_target` and `stream._resolve` call through a registry instead of special-casing `PlaybackType.YOUTUBE_STREAM`. `stream._handle_failure` calls the resolver's `forget`.
-2. **Enums and migration:**
-   - Add `PlaybackType.TWITCH_STREAM` and `ProviderType.TWITCH`.
-   - Add the type to `catalogue.IPTV_TYPES`, gated by a generalised `stream_type_allowed(ps)`.
-   - Migration `0005_twitch_sources` needs no new columns: the types are strings.
-3. **Twitch specifics the resolver must handle:**
-   - **Muxed HLS:** Twitch serves video and audio in one HLS stream, so there is a single FFmpeg input (`audio=None`). VODs are usually H.264 + AAC and can be remuxed (`IPTV_READY`).
-   - **Hosts:** live playlists come from `usher.ttvnw.net` / `*.hls.ttvnw.net`. VOD and clip CDNs vary (CloudFront and other domains), so the resolver must vet hosts with the same rule as `ytstream.STREAM_HOSTS`, using a Twitch host list. The resolver should log any unknown host it refuses, so the list can be kept current.
-   - **Mid-roll ads on live channels:** these insert discontinuities and resolution changes. Force `transcode` for Twitch live sources, the way `PlaybackFormat.AUTO` already transcodes `IPTV_NEEDS_TRANSCODE`, so the TS output stays continuous.
-   - **Expiring VODs:** Twitch deletes past broadcasts after 7–60 days. The existing health-check job (`jobs.py`) re-checks them, a failure takes the source out of rotation, and the schedule fails over.
-   - **Muted VOD segments:** silent audio stays valid output; flag the item for review.
-   - **Out of scope, as for YouTube:** no logins, OAuth user tokens, cookies, subscriber-only VODs or ad-block workarounds.
-4. **Live channel address:** `https://www.twitch.tv/<login>` works like YouTube's `/@handle/live`. It's a live item that always follows the current broadcast, is offline when they aren't live, and is rechecked every minute by the existing live-recheck job.
-5. **Tests:** resolver unit tests with a mocked yt-dlp `extract_info`, plus a `stream._cmd` test for the single-input + transcode path. Then a live capture check, as in Phase 0: 0 backwards timestamps, 0 gaps and 0 decode errors through Dispatcharr.
+## Phase 3 — Polish (optional)
 
-## Phase 2 — Twitch discovery provider
+- **Dashboard status per link:** last resolve, last error, and whether a live link is live now.
+- **Bulk paste a playlist:** a YouTube playlist URL or a Twitch channel's VOD list expands into individual links, so they can be confirmed in one go.
+- **Twitch discovery rules** through the official Helix API (client id + secret in `secrets/`), only if you later want automatic discovery rather than pasted links.
 
-**Outcome:** discovery rules can find Twitch content, like the YouTube rules.
-
-- Add `providers/twitch.py`, a `MediaProvider` on the official **Helix API**:
-  - an app access token via client credentials, stored in `secrets/twitch_client_secret`, never in the database
-  - `ATV_TWITCH_CLIENT_ID` in config
-- **Rule kinds:**
-  - `channel`: a broadcaster's archives, highlights and uploads (`/videos?user_id=`)
-  - `video`: a single VOD or clip
-  - `search`: channel search (`/search/channels`)
-  - live channel: one item, `live=true`
-- **Rate limits:** Helix token-bucket rate limits get handled the way `quota.py` handles YouTube quota, by pausing and reporting on the dashboard.
-- **Without credentials:** pasting a single Twitch URL into *Import* still works through yt-dlp metadata only (title, duration, thumbnail), like YouTube's oEmbed path. Search and channel rules need the API.
-- Items enter as `PENDING_REVIEW` with a `twitch_stream` source that stays `UNVERIFIED` until FFprobe validation, which is the same flow as every other provider.
-
-## Phase 3 — "Build a channel from links" flow
-
-**Outcome:** the react.tv-style experience of curating a channel quickly, without weakening the approval and rights gates.
-
-- **Channel builder page** in the React UI (`frontend/src/pages/`):
-  1. Paste a list of URLs: YouTube videos, playlists or `/live`, Twitch VODs, clips or channels, Archive items.
-  2. ArchiveTV imports and validates them in the background and shows each one's eligibility.
-  3. The curator ticks the ones to air and confirms **approve + authorise rights** per source. Each one gets an audit entry and a required permission note.
-  4. They're added to the channel in the given order.
-- **Ordered playlist mode:** `ScheduleMode.SEQUENTIAL` already loops in position order. Add drag-to-reorder backed by `ChannelItem.position` and a "loop / play once then fallback" toggle.
-- **Pinned programmes:** a "watch party at 20:00" is a one-off `ScheduleEntry` override at a fixed time. `scheduler.override` exists today for replacing an entry; extend it to insert at a time and push the rest of the schedule later.
-- **Two-week horizon:** `ATV_SCHEDULE_DAYS` already exists, so raise its default (or set it per channel) to 14 to match react.tv's two-week guide.
-- **API:** `POST /api/v1/channels/{id}/import-links` returns a job id; `GET /api/v1/jobs/{id}` returns per-link results. Everything stays usable through the REST API, as in the rest of ArchiveTV.
-
-## Phase 4 — Web companion (`/watch/{slug}`)
-
-**Outcome:** a public page that shows the same channel in a browser, in sync with the IPTV feed and with chat. IPTV stays the primary delivery path.
-
-- **Player choice, per channel:**
-  - **Official embeds (default):** the page asks `GET /api/v1/public/channels/{slug}/now` for the current entry and offset, then loads the YouTube IFrame or Twitch embed and seeks to `now − entry.start`. It re-syncs on each programme change and every 30 s, correcting drift above 2 s. Views go to the creator, and this works even for items that are only `EMBED_ONLY`, so the web page can show a superset of the IPTV channel. Make that difference visible in the UI.
-  - **The IPTV output itself:** this would need HLS, but the minimal-disk rule forbids an on-disk segment cache. An in-RAM HLS packager (a rolling window of about 6 × 2 s segments per channel, in memory) is possible but is a separate decision. Defer it.
-- **Guide:** now/next and a day grid from the existing schedule API, as a read-only public subset.
-- **Chat:** a WebSocket per channel with in-memory ring buffers (no persistence, matching the minimal-disk rule), anonymous nicknames, rate limits and admin moderation (delete message, ban by session). IPTV clients can't show chat. An optional chat burn-in overlay on the IPTV feed is possible later, but it forces transcoding; see Phase 5.
-- **Security:**
-  - The public routes are separate from the admin API and are off by default (`ATV_PUBLIC_WATCH=false`).
-  - They are read-only and expose only channels marked `public`.
-  - Keep `127.0.0.1` binding as the default; document a reverse proxy for public exposure.
-
-## Phase 5 — Reaction programmes (composited)
-
-**Outcome:** a creator reacts live to the scheduled video, and IPTV viewers see one composited picture: the video with the reactor's camera beside it or overlaid.
-
-- **How it works over IPTV:**
-  - A new kind of segment with **two inputs**: the scheduled programme at its offset, plus the reactor's live feed.
-  - FFmpeg composites them with `-filter_complex` (layout presets: picture-in-picture corner, side-by-side `hstack`, 70/30 split) and mixes audio (`amix` with ducking: programme at −10 dB while the reactor speaks, using `sidechaincompress`).
-  - `stream._cmd` already handles multiple inputs (the YouTube video + audio pair). This extends it to a filter graph.
-  - Compositing **always transcodes**, so CPU cost is about one 720p/1080p x264 encode per reacting channel. Document sizing.
-- **Where the reactor's feed comes from:**
-  1. **Their own Twitch/YouTube live** (reuses Phase 1 live sources). This has the lowest set-up cost, but there are 5–20 s of platform latency between what the reactor saw and what we receive.
-  2. **Direct ingest:** an SRT or WHIP endpoint run by a MediaMTX sidecar container, with RAM-only ingest and no recording. It has the lowest latency, and the reactor needs no platform account. This is the recommended path.
-- **Keeping reaction and video aligned:**
-  - The reactor watches the channel on a "reactor console" (the Phase 4 page, embed mode, synced to the schedule).
-  - Their feed arrives with latency *L*, so the compositor delays the programme input by *L* (a `-itsoffset` / `tpad` delay) and the whole composited channel runs *L* seconds behind the schedule.
-  - *L* is measured with a clapper: the console flashes and beeps on a known timestamp, and the server detects it in the ingest. It can then be fine-tuned with a slider.
-- **Scheduling:**
-  - A reaction is a time block bound to a reactor: `ChannelBlock.reactor_id`, plus a new `Reactor` table (name, ingest key, layout, audio mix).
-  - While the reactor feed is offline, the block plays the programme alone, without compositing, and the guide says so.
-- **Catch-up:** the reactor's feed is live and never recorded, so reaction airings can't be replayed. They follow the existing live rule ("not available"). Replaying the underlying programme alone is possible and should be a per-channel choice.
-- **Rights:** a reaction doesn't change the rights to the underlying video. The programme's source must still be `AUTHORISED`.
-
-## Phase 6 — Multiple curators (optional)
-
-ArchiveTV has a single admin account today. react.tv-style curation by many people needs:
-- `User` and `ChannelMember` tables with roles: **owner** (all channels, rights decisions), **curator** (edit their channels' items and blocks, propose imports) and **reactor** (ingest key only)
-- password auth plus optional OIDC
-- the audit log recording the real actor
-
-**Rights authorisation stays owner-only.** Curators can only propose. Keep SQLite: it's fine at this scale.
-
----
-
-## Data model changes (summary)
+## Data model changes
 
 | Change | Phase |
 |---|---|
-| `PlaybackType.TWITCH_STREAM`, `ProviderType.TWITCH` (enum values only) | 1 |
-| `PlaybackSource.permission_evidence` (text/URL) | 1 |
-| `Channel.public` (bool), `Channel.web_player` (`embed` / `iptv`) | 4 |
-| `Reactor` table; `ChannelBlock.reactor_id`, `.layout` | 5 |
-| `User`, `ChannelMember` tables; `AuditLog.actor` → FK | 6 |
-
-All of these are additive Alembic migrations (`0005`…), with no change to how existing schedules or history are stored.
+| `PlaybackType.TWITCH_STREAM`, `ProviderType.TWITCH`: string enum values, no column changes | 1 |
+| `Channel.end_behaviour` (`loop` / `fallback`) | 2 |
+| Nothing else: links reuse `MediaSource`, `MediaItem`, `PlaybackSource`, `ChannelItem` and `ScheduleEntry` | — |
 
 ## Risks
 
 | Risk | Effect | Mitigation |
 |---|---|---|
-| Platform changes break yt-dlp | Sources fail to resolve and the channel fails over | Already handled by failover; keep yt-dlp current (it's pinned in `requirements.txt`); show resolver errors on the dashboard |
-| Bot checks / anonymous access refused | Some videos can't air | Same as today: no workarounds. Those items fall back to embed-only for the web companion |
-| Twitch ads in live streams | Discontinuities and picture jumps | Force transcode for Twitch live sources; let an admin opt out |
-| Compositing CPU cost | Fewer concurrent channels | `ATV_MAX_REACTION_STREAMS`; a hardware encoder option (`h264_vaapi` / `h264_nvenc`) later |
-| Public exposure of `/watch` and chat | Abuse, scraping, SSRF via import | Off by default, read-only public API, rate limits, imports stay admin/curator-only and go through `security.py` |
-| Rights | Legal exposure | Mandatory rights gate + permission evidence; the web companion uses official embeds |
+| YouTube/Twitch change something and yt-dlp breaks | Links fail to resolve and the channel fails over to the next item | Already handled by failover. Keep yt-dlp current; show resolver errors on the dashboard |
+| Bot checks or anonymous access refused | Some videos won't play | Report it clearly when the link is added. No workarounds |
+| Twitch live ads | Picture jumps and timestamp breaks | Force transcode for Twitch live (costs CPU: about one x264 encode per live Twitch channel) |
+| Expiring stream addresses (YouTube ~6 h, Twitch tokens shorter) | Mid-programme failure | Resolvers re-resolve before expiry; on failure, re-resolve once before failing over |
+| Rights | Legal exposure for re-streaming | The permission checkbox and audit trail; the feature stays opt-in per platform |
 
-## Verification (per phase, as in Phase 0)
+## Suggested order
 
-- Unit tests next to the existing ones (`tests/test_ytstream.py` is the pattern for resolvers, `tests/test_stream.py` for FFmpeg commands).
-- An end-to-end capture through a throwaway Dispatcharr 0.33 instance: ingest, EPG, live, catch-up and Start Over, checking 0 backwards timestamps, 0 gaps and 0 decode errors. For reactions, also measure A/V alignment between the programme and the reactor feed (target within 100 ms after calibration).
-- A device test in TiviMate.
+1. **Phase 1, Twitch playback.** It mostly reuses the YouTube path. Moving `ytstream.py` into resolvers is a safe refactor first, with the existing tests as a guard.
+2. **Phase 2, paste-a-link.** This is the part that makes it feel like react.tv.
+3. **Phase 3**, as needed.
 
-## Suggested order and size
+## Open questions
 
-1. **Phase 1, Twitch playback:** small. It mostly reuses the YouTube stream path. ~1 week.
-2. **Phase 3, link-list channel builder:** small to medium; UI-heavy. It delivers most of the react.tv feel over IPTV.
-3. **Phase 2, Twitch discovery:** medium.
-4. **Phase 5, reactions:** large. It needs an ingest sidecar, a compositor and calibration. Prototype the FFmpeg filter graph first with two local files.
-5. **Phase 4, web companion + chat:** medium. Optional for IPTV, but it's the react.tv experience for browser viewers.
-6. **Phase 6, multi-user:** do it only if more than one person will curate.
-
-## Open questions for you
-
-1. Which content will you actually air: your own streams, opted-in creators, or Archive/CC material? This decides how much Phase 1–2 is worth versus Phase 5.
-2. Reactions: will the reactor stream from OBS straight to ArchiveTV (SRT/WHIP, recommended), or go live on Twitch/YouTube first?
-3. Should the web companion be public (internet-facing) or LAN-only?
-4. Do you need catch-up for reaction airings? That would require recording, which the minimal-disk rule currently forbids.
+1. Should a pasted link go **straight on air** (one confirmation checkbox, as above), or still stop in the review queue?
+2. When a channel's list runs out: **loop**, or **fallback programme**?
+3. Twitch live channels: do you want them on **time blocks** (e.g. a streamer's usual hours), or **around the clock whenever they're live**?
