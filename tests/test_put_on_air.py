@@ -195,3 +195,61 @@ def test_playlist_changes_reach_the_schedule(api, session):
     gone = next(i for i in d["items"] if i["media_item_id"] == a.id)
     api.delete(f"/api/v1/channels/{ch['id']}/items/{gone['id']}")
     assert set(upcoming()) == {b.id}
+
+
+def test_offline_youtube_live_link_airs_when_the_broadcast_starts(api, session, monkeypatch):
+    """Pasting a channel's /live address while it is offline must still lead
+    to it airing later: the live job only re-checks authorised sources."""
+    from archivetv import jobs
+
+    monkeypatch.setattr(settings, "youtube_streaming", True)
+    it = MediaItem(source=MediaSource(provider="youtube", external_id="live:@me"), title="@me — YouTube live",
+                   title_key="me youtube live", review_status=ReviewStatus.PENDING_REVIEW, tags=["live"])
+    it.playback_sources.append(PlaybackSource(playback_type=PlaybackType.YOUTUBE_STREAM, url="https://www.youtube.com/@me/live",
+                                              live=True, eligibility=Eligibility.UNAVAILABLE, health_ok=False))
+    session.add(it)
+    session.commit()
+    ch = api.post("/api/v1/channels", json={"slug": "live", "name": "Live"}).json()
+    r = api.post(f"/api/v1/media/{it.id}/air", json={"channel_id": ch["id"]}).json()
+    assert not r["air"]["on_air"] and "offline right now" in r["air"]["problem"]
+    session.expire_all()
+    ps = session.get(PlaybackSource, it.playback_sources[0].id)
+    assert ps.rights_status == RightsStatus.AUTHORISED and _entries(session, ch["id"]) == 0
+
+    async def goes_live(p):  # the broadcast has started
+        p.eligibility, p.health_ok = Eligibility.IPTV_READY, True
+
+    monkeypatch.setattr(jobs, "validate_source", goes_live)
+    asyncio.run(jobs.live_tick())
+    assert _entries(session, ch["id"]) > 0
+
+
+def test_repasting_a_youtube_link_after_turning_streaming_on(api, session, monkeypatch):
+    yt = _item(session, 7, provider="youtube", ptype=PlaybackType.YOUTUBE_EMBED, elig=Eligibility.EMBED_ONLY)
+    monkeypatch.setattr(settings, "youtube_streaming", True)
+    refreshed = []
+
+    async def fake_import(url):
+        return discovery.DiscoveryResult(found=1, skipped_known=1, known_item_ids=[yt.id])
+
+    async def fake_refresh(iid):  # what refresh_item does: the provider now adds a stream source
+        refreshed.append(iid)
+        from archivetv.db import session_scope
+        with session_scope() as s:
+            s.add(PlaybackSource(media_item_id=iid, playback_type=PlaybackType.YOUTUBE_STREAM,
+                                 url="https://www.youtube.com/watch?v=x7", eligibility=Eligibility.UNVERIFIED))
+
+    async def fake_revalidate(ids):
+        from archivetv.db import session_scope
+        with session_scope() as s:
+            for p in s.query(PlaybackSource).filter(PlaybackSource.media_item_id.in_(ids)).all():
+                if p.playback_type == PlaybackType.YOUTUBE_STREAM:
+                    p.eligibility, p.duration, p.health_ok = Eligibility.IPTV_READY, 900.0, True
+
+    monkeypatch.setattr(api_admin, "_import", fake_import)
+    monkeypatch.setattr(api_admin, "refresh_item", fake_refresh)
+    monkeypatch.setattr(api_admin, "_revalidate", fake_revalidate)
+    ch = api.post("/api/v1/channels", json={"slug": "yt", "name": "YT"}).json()
+    r = api.post(f"/api/v1/channels/{ch['id']}/links", json={"urls": ["https://www.youtube.com/watch?v=x7"]}).json()
+    assert refreshed == [yt.id]
+    assert r["results"][0]["items"][0]["on_air"], r

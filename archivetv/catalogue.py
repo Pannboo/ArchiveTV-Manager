@@ -324,9 +324,14 @@ def put_on_air(s: Session, item: MediaItem, actor: str = "admin", note: str | No
     if item.review_status != ReviewStatus.APPROVED:
         set_review_status(s, item, ReviewStatus.APPROVED, actor=actor, note=note or "put on air")
     for ps in item.playback_sources:
+        # A live source that is offline right now still gets authorised: the
+        # live job re-checks authorised live sources every minute and puts the
+        # channel on air once the broadcast starts. Until then the technical
+        # gates (eligibility + health) keep it off the schedule.
+        playable = ps.eligibility in IPTV_ELIGIBLE or (ps.live and ps.eligibility != Eligibility.REFERENCE_ONLY)
         if (
             ps.playback_type in IPTV_TYPES
-            and ps.eligibility in IPTV_ELIGIBLE
+            and playable
             and ps.rights_status not in (RightsStatus.AUTHORISED, RightsStatus.RESTRICTED)
             and youtube_stream_allowed(ps)
         ):
@@ -342,6 +347,10 @@ def air_problem(item: MediaItem) -> str | None:
     st = iptv_status(item)
     if st == "eligible":
         return None
+    if item.review_status == ReviewStatus.APPROVED and any(
+        ps.live and ps.rights_status == RightsStatus.AUTHORISED and youtube_stream_allowed(ps) for ps in item.playback_sources
+    ):
+        return "the live stream is offline right now: it goes on air by itself when the broadcast starts"
     if item.provider == "youtube" and not settings.youtube_streaming:
         return "YouTube playback is switched off: turn on 'Experimental: air YouTube videos' in Settings, then try again"
     return {

@@ -7,6 +7,7 @@ server-rendered pages, so both UIs behave identically.
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 import secrets
@@ -70,6 +71,8 @@ from .security import UnsafeURLError, check_url_syntax, safe_local_path
 from .stream import manager
 from .validator import validate_source
 from .web.admin import _IA_URL, _attempts, _item_query, _media_files, _revalidate
+
+log = logging.getLogger(__name__)
 
 auth_router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
 router = APIRouter(prefix="/api/v1", dependencies=[Depends(require_api)], tags=["admin"])
@@ -467,6 +470,18 @@ async def channel_links(channel_id: int, body: LinksIn, request: Request, user: 
         if not ids:
             r["error"] = "; ".join(res.errors) or "nothing playable was found at this link"
             continue
+        # A YouTube video imported while streaming was off has no stream
+        # source yet: refresh it from YouTube, which adds one now.
+        if settings.youtube_streaming:
+            with session_scope() as s:
+                no_stream = [i for i in res.known_item_ids
+                             if (it := s.get(MediaItem, i)) is not None and it.provider == "youtube"
+                             and not any(p.playback_type == PlaybackType.YOUTUBE_STREAM for p in it.playback_sources)]
+            for iid in no_stream:
+                try:
+                    await refresh_item(iid)
+                except Exception as e:  # noqa: BLE001 - reported per link below via air_problem
+                    log.info("refresh of item %s failed: %s", iid, e)
         # Items imported earlier but never validated get a fresh check first.
         with session_scope() as s:
             stale = [i for i in res.known_item_ids
