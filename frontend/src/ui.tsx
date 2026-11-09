@@ -177,3 +177,44 @@ export function Field({ label: l, children, hint }: { label: string; children: R
     </label>
   );
 }
+
+// ---------------------------------------------------------------- on-air helpers
+
+/** Plain-language names for the channel scheduling modes. */
+export const MODE_LABEL: Record<string, string> = {
+  sequential: "Play in order, then repeat", shuffle: "Shuffle", block: "Time blocks (advanced)",
+};
+
+/** Green "On air" chip, or the reason an item can't air. */
+export function AirChip({ onAir, problem, live }: { onAir: boolean; problem?: string | null; live?: boolean }) {
+  if (onAir) return <Chip cls="ok">{live ? "● live on air" : "✓ on air"}</Chip>;
+  return <Chip cls="warn" title={problem ?? undefined}>⚠ {problem ?? "not airing"}</Chip>;
+}
+
+/** A boolean preference kept in this browser only (e.g. a confirmation checkbox). */
+export function useRemembered(key: string, initial: boolean): [boolean, (v: boolean) => void] {
+  const [v, setV] = useState<boolean>(() => {
+    try {
+      const s = window.localStorage.getItem(key);
+      return s === null ? initial : s === "1";
+    } catch {
+      return initial;
+    }
+  });
+  return [v, (x: boolean) => {
+    setV(x);
+    try { window.localStorage.setItem(key, x ? "1" : "0"); } catch { /* storage unavailable: keep in memory */ }
+  }];
+}
+
+/** Tell the nav's inbox counter to refresh. */
+export const inboxChanged = () => window.dispatchEvent(new Event("atv:inbox-changed"));
+
+/** Summarise a batch of put-on-air results as one toast message. */
+export function airSummary(results: { on_air: boolean; title: string; problem: string | null }[]): { msg: string; ok: boolean } {
+  const on = results.filter((r) => r.on_air).length;
+  const bad = results.filter((r) => !r.on_air);
+  if (!bad.length) return { msg: `${on} item${on === 1 ? "" : "s"} on air.`, ok: true };
+  const why = bad.slice(0, 3).map((r) => `“${r.title.slice(0, 40)}”: ${r.problem}`).join(" · ");
+  return { msg: `${on} on air, ${bad.length} can't air yet. ${why}${bad.length > 3 ? " …" : ""}`, ok: on > 0 };
+}

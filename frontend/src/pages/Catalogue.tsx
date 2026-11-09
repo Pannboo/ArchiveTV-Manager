@@ -1,6 +1,6 @@
 import { Link, useSearchParams } from "react-router-dom";
 import { api, qs, type Channel, type MediaSummary, type Paged } from "../api";
-import { Chip, EligChip, fmtDur, IptvChip, Loading, StatusChip, useLoad, useMeta, useTime } from "../ui";
+import { AirChip, Chip, fmtDur, Loading, StatusChip, useLoad, useMeta, useTime } from "../ui";
 
 export default function Catalogue() {
   const meta = useMeta();
@@ -15,11 +15,12 @@ export default function Catalogue() {
 
   return (
     <>
-      <h1>Media catalogue</h1>
+      <h1>Library</h1>
+      <p className="muted" style={{ marginTop: -8 }}>Every video ArchiveTV knows about, on a channel or not.</p>
       <div className="toolbar">
         <input type="text" placeholder="Search title, description, creator, id…" defaultValue={f.q}
           onKeyDown={(e) => e.key === "Enter" && set("q", (e.target as HTMLInputElement).value)} />
-        <select value={f.provider} onChange={(e) => set("provider", e.target.value)}><option value="">All providers</option>
+        <select value={f.provider} onChange={(e) => set("provider", e.target.value)}><option value="">All sites</option>
           {Object.entries(meta.providers).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select>
         <select value={f.status} onChange={(e) => set("status", e.target.value)}><option value="">Any status</option>
           {meta.review_statuses.map((s) => <option key={s} value={s}>{s.replace(/_/g, " ").toLowerCase()}</option>)}</select>
@@ -32,7 +33,7 @@ export default function Catalogue() {
       <Loading error={list.error} loading={list.loading && !list.data} />
       <div className="panel scroll">
         <table>
-          <thead><tr><th>Title</th><th>Provider</th><th>Duration</th><th>Status</th><th>Playback</th><th>Updated</th></tr></thead>
+          <thead><tr><th>Title</th><th>Provider</th><th>Duration</th><th>Status</th><th>On air?</th><th>Updated</th></tr></thead>
           <tbody>
             {list.data?.items.map((it) => (
               <tr key={it.id}>
@@ -41,7 +42,7 @@ export default function Catalogue() {
                 <td className="small">{meta.providers[it.provider] ?? it.provider}</td>
                 <td className="small">{fmtDur(it.duration)}</td>
                 <td><StatusChip s={it.review_status} /></td>
-                <td className="row"><EligChip e={it.eligibility} /><IptvChip st={it.iptv_status} /></td>
+                <td className="row"><AirChip onAir={it.schedulable} problem={it.iptv_status} /></td>
                 <td className="small">{t(it.updated_at)}</td>
               </tr>
             ))}

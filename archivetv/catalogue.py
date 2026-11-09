@@ -303,5 +303,56 @@ def set_rights(s: Session, ps: PlaybackSource, rights: RightsStatus, note: str |
     _audit(s, ps.media_item, "rights", prev, rights, f"source #{ps.id}: {note or ''}".strip(), actor)
 
 
+def has_playable_source(item: MediaItem) -> bool:
+    """A validated, IPTV-capable source that ``put_on_air`` could authorise."""
+    return any(
+        ps.playback_type in IPTV_TYPES and ps.eligibility in IPTV_ELIGIBLE and ps.health_ok
+        and ps.rights_status != RightsStatus.RESTRICTED and youtube_stream_allowed(ps)
+        for ps in item.playback_sources
+    )
+
+
+def put_on_air(s: Session, item: MediaItem, actor: str = "admin", note: str | None = None) -> str:
+    """One-step "put this on air": approve the item and authorise every
+    validated, IPTV-capable source it has, in a single admin action.
+
+    Sources an admin explicitly marked RESTRICTED stay restricted, and the
+    technical gates still apply: a source that failed validation, is unhealthy,
+    or is a YouTube embed is never authorised. Returns ``iptv_status`` after
+    the change ("eligible" when the item can now be scheduled).
+    """
+    if item.review_status != ReviewStatus.APPROVED:
+        set_review_status(s, item, ReviewStatus.APPROVED, actor=actor, note=note or "put on air")
+    for ps in item.playback_sources:
+        if (
+            ps.playback_type in IPTV_TYPES
+            and ps.eligibility in IPTV_ELIGIBLE
+            and ps.rights_status not in (RightsStatus.AUTHORISED, RightsStatus.RESTRICTED)
+            and youtube_stream_allowed(ps)
+        ):
+            try:
+                set_rights(s, ps, RightsStatus.AUTHORISED, note=note or "authorised when put on air", actor=actor)
+            except ValueError:
+                continue
+    return iptv_status(item)
+
+
+def air_problem(item: MediaItem) -> str | None:
+    """Plain-language reason an item can't air after ``put_on_air``, or None."""
+    st = iptv_status(item)
+    if st == "eligible":
+        return None
+    if item.provider == "youtube" and not settings.youtube_streaming:
+        return "YouTube playback is switched off: turn on 'Experimental: air YouTube videos' in Settings, then try again"
+    return {
+        "not approved": "not put on air yet",
+        "no IPTV-capable source": "no playable video file was found for this item",
+        "no technically compatible source (validate)": "the video could not be read (it failed validation)",
+        "rights not authorised": "its playback source is marked restricted",
+        "failing health checks": "its playback source is failing health checks",
+        "unknown duration": "its length is unknown: set a duration on the item page",
+    }.get(st, st)
+
+
 def audit(s: Session, item: MediaItem | None, action: str, note: str | None = None, actor: str = "admin") -> None:
     _audit(s, item, action, note=note, actor=actor)

@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { api, IPTV_SOURCE_TYPES, type Channel, type MediaDetail, type MediaSummary, type Source } from "../api";
-import { Act, Chip, EligChip, Field, fmtBytes, fmtDur, IptvChip, label, Loading, Preview, RightsChip, StatusChip, useLoad, useMeta, useTime } from "../ui";
+import { api, IPTV_SOURCE_TYPES, type AirResult, type Channel, type MediaDetail, type MediaSummary, type Source } from "../api";
+import {
+  Act, AirChip, Chip, EligChip, Field, fmtBytes, fmtDur, inboxChanged, IptvChip, label, Loading, Preview, RightsChip, StatusChip, useLoad, useMeta, useTime,
+} from "../ui";
 
 interface History {
   history: { at: string; actor: string; action: string; from: string | null; to: string | null; note: string | null }[];
@@ -38,9 +40,10 @@ export default function Item() {
           <SourcesPanel it={it} bestId={hist.data?.best_source_id ?? null} reload={reload} />
         </div>
         <div>
-          <div className="panel">
-            <h3 style={{ marginTop: 0 }}>Review</h3>
-            <div className="row">
+          <AirPanel it={it} channels={channels.data ?? []} onDone={(d) => { item.setData(d); hist.reload(); inboxChanged(); }} />
+          <details className="panel advanced">
+            <summary><b>Individual steps</b> <span className="small muted">approve, reject, re-check</span></summary>
+            <div className="row" style={{ marginTop: 10 }}>
               {(["APPROVED", "REJECTED", "QUARANTINED", "PENDING_REVIEW"] as const).map((s) => (
                 <Act key={s} className={s === "APPROVED" ? "primary" : s === "REJECTED" ? "danger" : ""} disabled={it.review_status === s}
                   run={async () => { item.setData(await api.post<MediaDetail>(`/media/${id}/status`, { status: s })); hist.reload(); }}
@@ -54,7 +57,7 @@ export default function Item() {
               <Act run={async () => { item.setData(await api.post<MediaDetail>(`/media/${id}/revalidate`)); }} ok="Playback sources revalidated.">Revalidate</Act>
               {it.provider !== "local" && <Act run={async () => { item.setData(await api.post<MediaDetail>(`/media/${id}/refresh`)); }} ok="Provider metadata refreshed.">Refresh from provider</Act>}
             </div>
-          </div>
+          </details>
           <div className="panel">
             <h3 style={{ marginTop: 0 }}>Channels</h3>
             {it.channels.map((c) => (
@@ -85,6 +88,31 @@ export default function Item() {
         </div>
       </div>
     </>
+  );
+}
+
+function AirPanel({ it, channels, onDone }: { it: MediaDetail; channels: Channel[]; onDone: (d: MediaDetail) => void }) {
+  const [cid, setCid] = useState("");
+  const onAir = it.schedulable && it.channels.length > 0;
+  return (
+    <div className="panel">
+      <div className="spread"><h3 style={{ margin: 0 }}>On air</h3>
+        <AirChip onAir={onAir} problem={it.schedulable ? "not on any channel yet" : it.iptv_status} /></div>
+      {!onAir && (
+        <div className="row" style={{ marginTop: 10 }}>
+          <select value={cid} onChange={(e) => setCid(e.target.value)}>
+            <option value="">{it.channels.length ? "its current channel(s)" : "Pick a channel…"}</option>
+            {channels.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select>
+          <Act className="primary" disabled={!cid && !it.channels.length} run={async () => {
+            const d = await api.post<MediaDetail & { air: AirResult }>(`/media/${it.id}/air`, { channel_id: cid ? Number(cid) : null });
+            onDone(d);
+            if (!d.air.on_air) throw new Error(`Can't air yet: ${d.air.problem}`);
+          }} ok="On air.">Put on air</Act>
+        </div>
+      )}
+      <p className="small muted" style={{ marginBottom: 0 }}>Put on air approves this video, authorises its playable source and adds it to the channel's
+        schedule in one step.</p>
+    </div>
   );
 }
 

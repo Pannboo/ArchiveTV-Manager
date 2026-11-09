@@ -36,9 +36,9 @@ export default function Dashboard() {
   const r = data.resources;
   return (
     <>
-      <h1>Dashboard</h1>
+      <h1>Status</h1>
       <div className="grid">
-        <div className="panel"><div className="muted small">Pending review</div><div className="stat"><Link to="/review">{data.counts.PENDING_REVIEW ?? 0}</Link></div></div>
+        <div className="panel"><div className="muted small">Waiting in inbox</div><div className="stat"><Link to="/review">{data.counts.PENDING_REVIEW ?? 0}</Link></div></div>
         <div className="panel"><div className="muted small">Approved</div><div className="stat">{data.counts.APPROVED ?? 0}</div></div>
         <div className="panel"><div className="muted small">Catalogue by provider</div>
           {Object.entries(data.by_provider).map(([p, n]) => <div key={p}>{meta.providers[p] ?? p}: <b>{n}</b></div>)}

@@ -65,6 +65,7 @@ export interface Meta {
   feed_token: boolean;
   feed_query: string;
   minimal_disk: boolean;
+  youtube_streaming: boolean;
 }
 
 export interface MediaSummary {
@@ -169,7 +170,8 @@ export interface ChannelDetail extends Omit<Channel, "items"> {
   logo: string | null;
   rule_ids: number[];
   items: { id: number; media_item_id: number; title: string | null; role: string; position: number; duration: number | null;
-    review_status: string | null; schedulable: boolean }[];
+    review_status: string | null; schedulable: boolean; problem: string | null; provider: string | null;
+    thumbnail_url: string | null; live: boolean }[];
   blocks: { id: number; name: string; days: string; start_time: string; end_time: string; tag_filter: string | null; mode: string }[];
 }
 
@@ -195,4 +197,18 @@ export interface Paged<T> {
   page: number;
   pages: number;
   items: T[];
+}
+
+/** Outcome of putting one item on air (approve + authorise + add to channel). */
+export interface AirResult {
+  id: number;
+  title: string;
+  on_air: boolean;
+  problem: string | null;
+}
+
+export interface LinkResult {
+  url: string;
+  items: AirResult[];
+  error: string | null;
 }

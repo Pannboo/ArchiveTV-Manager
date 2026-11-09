@@ -23,19 +23,21 @@ from . import appsettings, catchup, jobs, logos, monitor, ytstream
 from .api import _channel, _detail, _iso, _item, channel_out, entry_out, media_out, require_api, rule_out
 from .catalogue import (
     IPTV_TYPES,
+    air_problem,
     assign_to_channel,
     audit,
     best_iptv_source,
     file_sha1,
     flag_duplicate,
     is_schedulable,
+    put_on_air,
     set_review_status,
     set_rights,
     title_key,
 )
 from .config import settings
 from .db import backup_database, session_scope, utcnow
-from .discovery import import_youtube_live, refresh_item, run_query
+from .discovery import DiscoveryResult, import_youtube_live, refresh_item, run_query
 from .enums import (
     ChannelRole,
     Eligibility,
@@ -63,7 +65,7 @@ from .models import (
 )
 from .providers import get_provider, provider_labels
 from .providers.youtube import parse_youtube_url
-from .scheduler import RETENTION_CHOICES, check_continuity, current_entry, history_days, maintain, override
+from .scheduler import RETENTION_CHOICES, check_continuity, current_entry, history_days, maintain, override, regenerate
 from .security import UnsafeURLError, check_url_syntax, safe_local_path
 from .stream import manager
 from .validator import validate_source
@@ -125,6 +127,7 @@ def meta():
         "providers": provider_labels(), "retention_choices": list(RETENTION_CHOICES),
         "timezone": str(settings.timezone), "schedule_days": settings.schedule_days,
         "feed_token": bool(settings.feed_token), "minimal_disk": settings.minimal_disk,
+        "youtube_streaming": bool(settings.youtube_streaming),
         # Appended to feed/stream links the admin opens (same as the classic Settings page shows).
         "feed_query": f"token={quote(settings.feed_token)}" if settings.feed_token else "",
     }
@@ -215,20 +218,31 @@ class ImportIn(BaseModel):
     url: str
 
 
+UNRECOGNISED_URL = "unrecognised link: paste an archive.org/details/… link or a YouTube video, playlist, @channel or @channel/live URL"
+
+
+async def _import(url: str) -> DiscoveryResult:
+    """Import one Archive item, or a YouTube video / playlist / channel, by URL.
+    Raises ValueError for links that aren't from a supported site."""
+    url = url.strip()
+    m = _IA_URL.search(url)
+    if ytstream.channel_live_url(url):
+        return await import_youtube_live(url)
+    if m:
+        return await run_query("archive", RuleKind.VIDEO, m.group(1), {}, 1, interactive=True)
+    if parse_youtube_url(url):
+        kind, _ = parse_youtube_url(url)  # type: ignore[misc]
+        return await run_query("youtube", RuleKind.VIDEO, url, {}, 50 if kind != "video" else 1, interactive=True)
+    raise ValueError(UNRECOGNISED_URL)
+
+
 @router.post("/discovery/import")
 async def import_url(body: ImportIn):
     """Import one Archive item, or a YouTube video / playlist / channel, by URL."""
-    url = body.url.strip()
-    m = _IA_URL.search(url)
-    if ytstream.channel_live_url(url):
-        res = await import_youtube_live(url)
-    elif m:
-        res = await run_query("archive", RuleKind.VIDEO, m.group(1), {}, 1, interactive=True)
-    elif parse_youtube_url(url):
-        kind, _ = parse_youtube_url(url)  # type: ignore[misc]
-        res = await run_query("youtube", RuleKind.VIDEO, url, {}, 50 if kind != "video" else 1, interactive=True)
-    else:
-        raise HTTPException(400, "unrecognised URL: paste an archive.org/details/… link or a YouTube video, playlist or @channel URL")
+    try:
+        res = await _import(body.url)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
     return {"found": res.found, "new": res.new, "skipped_known": res.skipped_known, "errors": res.errors,
             "item_ids": res.new_item_ids}
 
@@ -378,9 +392,96 @@ async def add_source(item_id: int, body: SourceIn, user: str = Depends(require_a
         return _detail(s, it)
 
 
+class AirIn(BaseModel):
+    channel_id: int | None = None
+    role: ChannelRole = ChannelRole.PROGRAMME
+
+
+def _refresh_schedules(s, channel_ids: set[int]) -> None:
+    """Pick up newly airable content now rather than at the next schedule job."""
+    s.flush()
+    for cid in channel_ids:
+        ch = s.get(Channel, cid)
+        if ch is not None:
+            maintain(s, ch)
+
+
+def _air_items(s, item_ids: list[int], channel_id: int | None, role: ChannelRole, actor: str) -> list[dict]:
+    """Put items on air (and on a channel). Returns one result per item."""
+    out, touched = [], set()
+    for iid in item_ids:
+        it = s.get(MediaItem, iid)
+        if it is None:
+            continue
+        put_on_air(s, it, actor=actor)
+        if channel_id:
+            assign_to_channel(s, it, channel_id, role)
+        s.flush()
+        on = {ci.channel_id for ci in s.scalars(select(ChannelItem).where(ChannelItem.media_item_id == iid)).all()}
+        problem = air_problem(it) or (None if on else "ready, but not on any channel yet: pick a channel")
+        out.append({"id": it.id, "title": it.title, "on_air": problem is None, "problem": problem})
+        touched |= on
+    _refresh_schedules(s, touched)
+    return out
+
+
+@router.post("/media/{item_id}/air")
+def media_air(item_id: int, body: AirIn, user: str = Depends(require_api)):
+    """One click: approve, authorise its validated sources, optionally add to a
+    channel, and refresh the affected schedules."""
+    with session_scope() as s:
+        it = _item(s, item_id)
+        if body.channel_id is not None:
+            _channel(s, body.channel_id)
+        res = _air_items(s, [item_id], body.channel_id, body.role, user)[0]
+        d = _detail(s, it)
+        d["air"] = res
+        return d
+
+
+class LinksIn(BaseModel):
+    urls: list[str] = Field(..., min_length=1, max_length=50)
+    role: ChannelRole = ChannelRole.PROGRAMME
+
+
+@router.post("/channels/{channel_id}/links")
+async def channel_links(channel_id: int, body: LinksIn, request: Request, user: str = Depends(require_api)):
+    """Paste links, get them on air: import each link (or reuse it if it is
+    already in the catalogue), validate it, approve it, authorise its playable
+    sources and add it to this channel, then refresh the schedule."""
+    with session_scope() as s:
+        _channel(s, channel_id)
+    results = []
+    for raw in body.urls:
+        url = raw.strip()
+        if not url:
+            continue
+        r: dict = {"url": url, "items": [], "error": None}
+        results.append(r)
+        try:
+            res = await _import(url)
+        except ValueError as e:
+            r["error"] = str(e)
+            continue
+        ids = res.new_item_ids + [i for i in res.known_item_ids if i not in res.new_item_ids]
+        if not ids:
+            r["error"] = "; ".join(res.errors) or "nothing playable was found at this link"
+            continue
+        # Items imported earlier but never validated get a fresh check first.
+        with session_scope() as s:
+            stale = [i for i in res.known_item_ids
+                     if (it := s.get(MediaItem, i)) is not None and not any(p.eligibility in (Eligibility.IPTV_READY,
+                         Eligibility.IPTV_NEEDS_TRANSCODE) for p in it.playback_sources if p.playback_type in IPTV_TYPES)]
+        if stale:
+            await _revalidate(stale)
+        with session_scope() as s:
+            r["items"] = _air_items(s, ids, channel_id, body.role, user)
+    return {"results": results, "channel": channel_detail(channel_id, request)}
+
+
 class BulkIn(BaseModel):
     ids: list[int] = Field(..., min_length=1)
-    action: Literal["approve", "reject", "quarantine", "pending", "assign", "authorise", "catalogue_only", "revalidate"]
+    action: Literal["air", "approve", "reject", "quarantine", "pending", "assign", "authorise", "catalogue_only", "revalidate"]
     note: str | None = None
     channel_id: int | None = None
     role: ChannelRole = ChannelRole.PROGRAMME
@@ -391,6 +492,14 @@ async def bulk(body: BulkIn, user: str = Depends(require_api)):
     status_map = {"approve": ReviewStatus.APPROVED, "reject": ReviewStatus.REJECTED, "quarantine": ReviewStatus.QUARANTINED,
                   "pending": ReviewStatus.PENDING_REVIEW}
     revalidate, skipped = [], []
+    if body.action == "air":
+        with session_scope() as s:
+            if body.channel_id is not None:
+                _channel(s, body.channel_id)
+            res = _air_items(s, body.ids, body.channel_id, body.role, user)
+        not_airing = [r for r in res if not r["on_air"]]
+        return {"action": "air", "count": len(res), "on_air": len(res) - len(not_airing), "not_airing": not_airing,
+                "skipped_no_iptv_source": [r["id"] for r in not_airing]}
     with session_scope() as s:
         if body.channel_id is not None:
             _channel(s, body.channel_id)
@@ -587,7 +696,11 @@ def channel_detail(channel_id: int, request: Request):
             "items": [{"id": ci.id, "media_item_id": ci.media_item_id, "title": ci.media_item.title if ci.media_item else None,
                        "role": ci.role, "position": ci.position, "duration": ci.media_item.duration if ci.media_item else None,
                        "review_status": ci.media_item.review_status if ci.media_item else None,
-                       "schedulable": bool(ci.media_item and is_schedulable(ci.media_item))} for ci in ch.items],
+                       "schedulable": bool(ci.media_item and is_schedulable(ci.media_item)),
+                       "problem": air_problem(ci.media_item) if ci.media_item else "item deleted",
+                       "provider": ci.media_item.provider if ci.media_item else None,
+                       "thumbnail_url": ci.media_item.thumbnail_url if ci.media_item else None,
+                       "live": bool(ci.media_item and any(p.live for p in ci.media_item.playback_sources))} for ci in ch.items],
             "blocks": [{"id": b.id, "name": b.name, "days": b.days, "start_time": b.start_time, "end_time": b.end_time,
                         "tag_filter": b.tag_filter, "mode": b.mode} for b in ch.blocks],
         })
@@ -631,23 +744,57 @@ class ChannelItemPatch(BaseModel):
 
 
 @router.patch("/channels/{channel_id}/items/{ci_id}")
-def patch_channel_item(channel_id: int, ci_id: int, body: ChannelItemPatch, request: Request):
+def patch_channel_item(channel_id: int, ci_id: int, body: ChannelItemPatch, request: Request, user: str = Depends(require_api)):
     with session_scope() as s:
         ci = s.get(ChannelItem, ci_id)
         if ci is None or ci.channel_id != channel_id:
             raise HTTPException(404, "unknown channel item")
-        for k, v in body.model_dump(exclude_unset=True).items():
+        changes = body.model_dump(exclude_unset=True)
+        changed = any(getattr(ci, k) != v for k, v in changes.items())
+        for k, v in changes.items():
             setattr(ci, k, v)
+        if changed:
+            _rebuild_upcoming(s, channel_id, user)
+    return channel_detail(channel_id, request)
+
+
+def _rebuild_upcoming(s, channel_id: int, actor: str) -> None:
+    """Apply a playlist change to the published schedule straight away. The
+    programme on air now is kept; everything after it is rebuilt."""
+    s.flush()
+    s.expire_all()  # the channel's item list may predate the change
+    ch = s.get(Channel, channel_id)
+    if ch is not None and ch.enabled:
+        regenerate(s, ch, actor=actor)
+
+
+class ChannelOrderIn(BaseModel):
+    item_ids: list[int] = Field(..., min_length=1, description="Channel item ids in the new playing order")
+
+
+@router.post("/channels/{channel_id}/items/order")
+def order_channel_items(channel_id: int, body: ChannelOrderIn, request: Request, user: str = Depends(require_api)):
+    """Set the playing order in one go (positions 10, 20, …) and rebuild the upcoming schedule once."""
+    with session_scope() as s:
+        ch = _channel(s, channel_id)
+        by_id = {ci.id: ci for ci in ch.items}
+        if set(body.item_ids) - set(by_id):
+            raise HTTPException(400, "unknown channel item in order")
+        rest = [ci.id for ci in sorted(ch.items, key=lambda c: c.position) if ci.id not in body.item_ids]
+        for n, cid in enumerate(body.item_ids + rest, start=1):
+            by_id[cid].position = n * 10
+        _rebuild_upcoming(s, channel_id, user)
     return channel_detail(channel_id, request)
 
 
 @router.delete("/channels/{channel_id}/items/{ci_id}")
-def delete_channel_item(channel_id: int, ci_id: int, request: Request):
+def delete_channel_item(channel_id: int, ci_id: int, request: Request, user: str = Depends(require_api)):
     with session_scope() as s:
         ci = s.get(ChannelItem, ci_id)
         if ci is None or ci.channel_id != channel_id:
             raise HTTPException(404, "unknown channel item")
         s.delete(ci)
+        _rebuild_upcoming(s, channel_id, user)
     return channel_detail(channel_id, request)
 
 

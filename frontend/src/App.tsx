@@ -1,6 +1,6 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { NavLink, Navigate, Route, Routes } from "react-router-dom";
-import { api, ApiError, type Meta } from "./api";
+import { api, ApiError, qs, type Meta, type Paged } from "./api";
 import { MetaContext } from "./ui";
 import Dashboard from "./pages/Dashboard";
 import Discovery from "./pages/Discovery";
@@ -14,11 +14,28 @@ import Catchup from "./pages/Catchup";
 import Sources from "./pages/Sources";
 import Settings from "./pages/Settings";
 
+// Everyday tasks first; the technical pages sit in a quieter second group.
 const NAV: [string, string][] = [
-  ["/", "Dashboard"], ["/discovery", "Discovery sources"], ["/review", "Review queue"], ["/catalogue", "Catalogue"],
-  ["/channels", "Channels"], ["/schedule", "Schedule"], ["/catchup", "Catch-up"], ["/sources", "Playback sources"],
-  ["/settings", "Settings"],
+  ["/channels", "Channels"], ["/review", "Inbox"], ["/discovery", "Find videos"], ["/catalogue", "Library"],
 ];
+const NAV_MORE: [string, string][] = [
+  ["/status", "Status"], ["/schedule", "Schedule"], ["/catchup", "Catch-up"], ["/sources", "Playback sources"], ["/settings", "Settings"],
+];
+
+/** Number of items waiting in the inbox, refreshed every 30 s. */
+function useInboxCount(enabled: boolean): number | null {
+  const [n, setN] = useState<number | null>(null);
+  useEffect(() => {
+    if (!enabled) return;
+    const load = () => api.get<Paged<unknown>>(`/catalogue${qs({ status: "PENDING_REVIEW", per_page: 1 })}`)
+      .then((r) => setN(r.total)).catch(() => {});
+    load();
+    const h = setInterval(load, 30000);
+    window.addEventListener("atv:inbox-changed", load);
+    return () => { clearInterval(h); window.removeEventListener("atv:inbox-changed", load); };
+  }, [enabled]);
+  return n;
+}
 
 export default function App() {
   const [user, setUser] = useState<string | null | undefined>(undefined);
@@ -34,6 +51,7 @@ export default function App() {
     if (user) api.get<Meta>("/meta").then(setMeta).catch(() => setMeta(null));
   }, [user]);
 
+  const inbox = useInboxCount(!!user);
   if (user === undefined) return null;
   if (user === null) return <Login onLogin={setUser} />;
   if (!meta) return <p className="muted" style={{ padding: 20 }}>Loading…</p>;
@@ -44,15 +62,23 @@ export default function App() {
         <NavLink className="brand" to="/">ArchiveTV</NavLink>
         <nav>
           {NAV.map(([to, name]) => (
-            <NavLink key={to} to={to} end={to === "/"} className={({ isActive }) => (isActive ? "on" : "")}>{name}</NavLink>
+            <NavLink key={to} to={to} className={({ isActive }) => (isActive ? "on" : "")}>
+              {name}{to === "/review" && !!inbox && <span className="badge">{inbox}</span>}
+            </NavLink>
           ))}
+          <span className="nav-more">
+            {NAV_MORE.map(([to, name]) => (
+              <NavLink key={to} to={to} className={({ isActive }) => (isActive ? "on" : "")}>{name}</NavLink>
+            ))}
+          </span>
         </nav>
         <span className="small muted">{user}</span>
         <button onClick={async () => { await api.post("/auth/logout"); setUser(null); }}>Sign out</button>
       </header>
       <main>
         <Routes>
-          <Route path="/" element={<Dashboard />} />
+          <Route path="/" element={<Navigate to="/channels" replace />} />
+          <Route path="/status" element={<Dashboard />} />
           <Route path="/discovery" element={<Discovery />} />
           <Route path="/review" element={<Review />} />
           <Route path="/catalogue" element={<Catalogue />} />

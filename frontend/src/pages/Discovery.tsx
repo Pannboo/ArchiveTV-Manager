@@ -1,19 +1,29 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { api, type Channel, type Rule } from "../api";
-import { Act, Chip, Field, Loading, useLoad, useMeta, useTime, useToast } from "../ui";
+import { api, type Channel, type LinkResult, type Rule } from "../api";
+import { Act, airSummary, Chip, Field, inboxChanged, Loading, useLoad, useMeta, useRemembered, useTime, useToast } from "../ui";
 
-const KINDS: [string, string][] = [
-  ["search", "Keyword search"], ["collection", "Archive collection"], ["channel", "YouTube channel uploads"],
-  ["playlist", "YouTube playlist"], ["video", "Single item / URL"],
+// [kind, label, providers it applies to]
+const KINDS: [string, string, string[]][] = [
+  ["search", "Keyword search", ["archive", "youtube"]], ["collection", "Archive collection", ["archive"]],
+  ["channel", "YouTube channel uploads", ["youtube"]], ["playlist", "YouTube playlist", ["youtube"]],
+  ["video", "Single item / URL", ["archive", "youtube"]],
 ];
-const TEXT_PARAMS: [string, string, string?][] = [
-  ["collection", "Archive collection(s), ; separated", "classic_tv"], ["creator", "Archive creator"], ["subject", "Archive subject"],
-  ["year_from", "Year from"], ["year_to", "Year to"], ["channel", "YouTube channel (@handle, URL or UC id)"],
-  ["playlist", "YouTube playlist (URL or id)"], ["published_after", "Published after (YYYY-MM-DD)"],
-  ["published_before", "Published before (YYYY-MM-DD)"], ["categories", "YouTube categories (ids or names)", "1, 24"],
-  ["excluded_channels", "Excluded channels/creators (comma)"], ["excluded_keywords", "Excluded keywords (comma)"],
-  ["sort", "Archive sort", "addeddate desc"], ["preferred_formats", "Preferred formats, best first", "h.264, mpeg4"],
+// [param, label, placeholder, providers it applies to]
+const TEXT_PARAMS: [string, string, string | undefined, string[]][] = [
+  ["collection", "Collection(s), ; separated", "classic_tv", ["archive"]], ["creator", "Creator", undefined, ["archive"]],
+  ["subject", "Subject", undefined, ["archive"]], ["year_from", "Year from", undefined, ["archive"]], ["year_to", "Year to", undefined, ["archive"]],
+  ["channel", "Channel (@handle, URL or UC id)", undefined, ["youtube"]], ["playlist", "Playlist (URL or id)", undefined, ["youtube"]],
+  ["published_after", "Published after (YYYY-MM-DD)", undefined, ["youtube"]],
+  ["published_before", "Published before (YYYY-MM-DD)", undefined, ["youtube"]],
+  ["categories", "Categories (ids or names)", "1, 24", ["youtube"]],
+  ["excluded_channels", "Excluded channels/creators (comma)", undefined, ["archive", "youtube"]],
+  ["excluded_keywords", "Excluded keywords (comma)", undefined, ["archive", "youtube"]],
+  ["sort", "Sort", "addeddate desc", ["archive"]], ["preferred_formats", "Preferred formats, best first", "h.264, mpeg4", ["archive"]],
+];
+const FLAGS: [string, string, string[]][] = [
+  ["licensed_only", "Only items with a declared licence", ["archive"]], ["embeddable_only", "Embeddable only", ["youtube"]],
+  ["skip_validation", "Skip the playback check (FFprobe): unchecked videos can't air", ["archive", "youtube"]],
 ];
 
 type Draft = { id?: number; name: string; provider: string; kind: string; query: string; params: Record<string, unknown>;
@@ -31,6 +41,8 @@ export default function Discovery() {
   const channels = useLoad(() => api.get<Channel[]>("/channels"), []);
   const [draft, setDraft] = useState<Draft | null>(null);
   const [url, setUrl] = useState("");
+  const [target, setTarget] = useState("");
+  const [allowed, setAllowed] = useRemembered("atv:permission-confirmed", false);
 
   const save = async () => {
     if (!draft) return;
@@ -54,23 +66,42 @@ export default function Discovery() {
 
   return (
     <>
-      <h1>Discovery sources</h1>
+      <h1>Find videos</h1>
       <div className="panel">
-        <h3 style={{ marginTop: 0 }}>Import by URL</h3>
+        <h3 style={{ marginTop: 0 }}>Add one link</h3>
+        <p className="small muted" style={{ marginTop: 0 }}>The quickest way to fill a channel is to paste links on the channel's own page. Here you can
+          also send a link to the inbox to look at first.</p>
         <div className="row">
           <input type="text" value={url} onChange={(e) => setUrl(e.target.value)} style={{ flex: 1, minWidth: 260 }}
             placeholder="https://archive.org/details/…, a YouTube video, playlist, @channel, or @channel/live URL" />
-          <Act className="primary" disabled={!url.trim()} run={async () => {
+          <select value={target} onChange={(e) => setTarget(e.target.value)}>
+            <option value="">Send to inbox</option>
+            {channels.data?.map((c) => <option key={c.id} value={c.id}>Put on air on {c.name}</option>)}</select>
+          <Act className="primary" disabled={!url.trim() || (!!target && !allowed)} run={async () => {
+            if (target) {
+              const r = await api.post<{ results: LinkResult[] }>(`/channels/${target}/links`, { urls: [url] });
+              const res = r.results[0];
+              if (res?.error) throw new Error(res.error);
+              const s = airSummary(res?.items ?? []);
+              notify(s.msg, s.ok ? "ok" : "error");
+              setUrl("");
+              return;
+            }
             const r = await api.post<{ new: number; skipped_known: number; errors: string[] }>("/discovery/import", { url });
             if (r.errors.length) throw new Error(`Import failed: ${r.errors.join("; ")}`);
-            notify(r.new ? `Imported ${r.new} item(s) into the review queue.` : `Nothing new (${r.skipped_known} already in catalogue).`);
+            notify(r.new ? `Added ${r.new} item(s) to the inbox.` : `Nothing new (${r.skipped_known} already in your library).`);
             setUrl("");
+            inboxChanged();
             if (r.new) nav("/review");
-          }}>Import</Act>
+          }}>Add</Act>
         </div>
+        {!!target && <label className="inline small" style={{ marginTop: 8 }}><input type="checkbox" checked={allowed}
+          onChange={(e) => setAllowed(e.target.checked)} /> I have permission to broadcast this</label>}
       </div>
 
-      <div className="spread"><h2>Rules</h2><button className="primary" onClick={() => setDraft(empty())}>New rule</button></div>
+      <div className="spread"><h2>Discovery rules</h2><button className="primary" onClick={() => setDraft(empty())}>New rule</button></div>
+      <p className="small muted" style={{ marginTop: -4 }}>Rules search a site on a schedule. What they find goes to the inbox, or straight on air if
+        you turn that on for the rule.</p>
       <Loading error={rules.error} loading={rules.loading && !rules.data} />
       <div className="panel scroll">
         <table>
@@ -78,7 +109,8 @@ export default function Discovery() {
           <tbody>
             {rules.data?.map((r) => (
               <tr key={r.id}>
-                <td><b>{r.name}</b> {!r.enabled && <Chip>paused</Chip>}<div className="small muted">{r.kind} · max {r.max_results}</div></td>
+                <td><b>{r.name}</b> {!r.enabled && <Chip>paused</Chip>} {r.params.auto_air ? <Chip cls="ok">auto on air</Chip> : null}
+                  <div className="small muted">{r.kind} · max {r.max_results}</div></td>
                 <td>{meta.providers[r.provider] ?? r.provider}</td>
                 <td className="small">{r.query || <span className="muted">—</span>}</td>
                 <td className="small">{r.scan_interval_minutes >= 60 ? `${r.scan_interval_minutes / 60} h` : `${r.scan_interval_minutes} min`}</td>
@@ -108,19 +140,24 @@ export default function Discovery() {
           <h3 style={{ marginTop: 0 }}>{draft.id ? `Edit rule #${draft.id}` : "New rule"}</h3>
           <div className="fields">
             <Field label="Name"><input type="text" value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} /></Field>
-            <Field label="Provider"><select value={draft.provider} disabled={!!draft.id} onChange={(e) => setDraft({ ...draft, provider: e.target.value })}>
+            <Field label="Site"><select value={draft.provider} disabled={!!draft.id} onChange={(e) => {
+              const provider = e.target.value;
+              const ok = KINDS.some(([k, , ps]) => k === draft.kind && ps.includes(provider));
+              setDraft({ ...draft, provider, kind: ok ? draft.kind : "search" });
+            }}>
               {Object.entries(meta.providers).filter(([k]) => k !== "local").map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select></Field>
             <Field label="Kind"><select value={draft.kind} disabled={!!draft.id} onChange={(e) => setDraft({ ...draft, kind: e.target.value })}>
-              {KINDS.map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select></Field>
+              {KINDS.filter(([, , ps]) => ps.includes(draft.provider)).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select></Field>
             <Field label="Query / keywords / URL"><input type="text" value={draft.query} onChange={(e) => setDraft({ ...draft, query: e.target.value })} /></Field>
             <Field label="Max results per scan"><input type="number" min={1} max={500} value={draft.max_results}
               onChange={(e) => setDraft({ ...draft, max_results: Number(e.target.value) })} /></Field>
             <Field label="Scan every (minutes)"><input type="number" min={15} value={draft.scan_interval_minutes}
               onChange={(e) => setDraft({ ...draft, scan_interval_minutes: Number(e.target.value) })} /></Field>
           </div>
-          <h3>Filters and preferences</h3>
-          <div className="fields">
-            {TEXT_PARAMS.map(([k, l, ph]) => (
+          <details className="advanced" style={{ margin: "12px 0" }}>
+          <summary><b>Filters and preferences</b> <span className="small muted">optional</span></summary>
+          <div className="fields" style={{ marginTop: 8 }}>
+            {TEXT_PARAMS.filter(([, , , ps]) => ps.includes(draft.provider)).map(([k, l, ph]) => (
               <Field key={k} label={l}><input type="text" placeholder={ph} value={String(draft.params[k] ?? "")} onChange={(e) => setP(k, e.target.value)} /></Field>
             ))}
             <Field label="Min duration (minutes)"><input type="number" min={0} step="0.5" value={String(draft.params.min_duration ?? "")} onChange={(e) => setP("min_duration", e.target.value)} /></Field>
@@ -128,18 +165,25 @@ export default function Discovery() {
             <Field label="Preferred resolution"><select value={String(draft.params.preferred_height ?? "")} onChange={(e) => setP("preferred_height", e.target.value)}>
               <option value="">Any (format order only)</option>{[360, 480, 576, 720, 1080].map((h) => <option key={h} value={h}>{h}p</option>)}</select></Field>
           </div>
-          {([["licensed_only", "Archive: only items with a declared licence"], ["embeddable_only", "YouTube: embeddable only"],
-            ["skip_validation", "Skip automatic validation (FFprobe) — unvalidated items cannot be scheduled"]] as const).map(([k, l]) => (
+          {FLAGS.filter(([, , ps]) => ps.includes(draft.provider)).map(([k, l]) => (
             <label key={k} className="inline"><input type="checkbox" checked={!!draft.params[k]} onChange={(e) => setP(k, e.target.checked)} /> {l}</label>
           ))}
+          </details>
           <label className="inline"><input type="checkbox" checked={draft.enabled} onChange={(e) => setDraft({ ...draft, enabled: e.target.checked })} /> Enabled</label>
-          <p className="small muted">Manual approval is always required: discovered items are never scheduled until an administrator approves them.</p>
-          <h3>Linked channels</h3>
-          <p className="small muted">Items from this rule are added to these channels when you approve them.</p>
+          <h3>Channels</h3>
+          <p className="small muted">What this rule finds is added to these channels when it's put on air.</p>
           {channels.data?.map((c) => (
             <label key={c.id} className="inline"><input type="checkbox" checked={draft.channel_ids.includes(c.id)} onChange={(e) =>
               setDraft({ ...draft, channel_ids: e.target.checked ? [...draft.channel_ids, c.id] : draft.channel_ids.filter((x) => x !== c.id) })} /> {c.name}</label>
           ))}
+          <div className="panel auto-air">
+            <label className="inline"><input type="checkbox" checked={!!draft.params.auto_air} onChange={(e) => setP("auto_air", e.target.checked)} />
+              <b>Put new finds on air automatically</b> (skip the inbox)</label>
+            <p className="small muted" style={{ margin: "4px 0 0" }}>Every new video that plays correctly is approved and added to the channels above.
+              Only use this for sources you have permission to broadcast. Videos that fail the playback check still go to the inbox.</p>
+            {!!draft.params.auto_air && !draft.channel_ids.length && <p className="small warn-text">Pick at least one channel above, or finds
+              will be approved but not shown anywhere.</p>}
+          </div>
           <p className="row"><Act className="primary" disabled={!draft.name.trim()} run={save} ok="Rule saved.">Save rule</Act>
             <button onClick={() => setDraft(null)}>Cancel</button></p>
         </div>

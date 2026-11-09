@@ -21,7 +21,7 @@ The project keeps these concerns separate, so a new provider never touches sched
 - that source's rights are `AUTHORISED`
 - that source passed its most recent health check
 
-Approving an item never makes it IPTV-eligible by itself.
+Approving an item never makes it IPTV-eligible by itself. **Put on air** (below) does all of these steps in one admin action; it never overrides a failed playback check or a source marked `RESTRICTED`.
 
 **YouTube is discovery only by default.** YouTube items get the official embedded player for previews and stay `EMBED_ONLY`/`REFERENCE_ONLY`. YouTube URLs are rejected as playback sources. To air something you found on YouTube, attach a separately authorised source on the item page, or opt into the experimental streaming below.
 
@@ -134,6 +134,21 @@ Persistent writes are limited to:
 
 ## Workflow
 
+### The quick way: paste links
+
+1. **Channels → New channel.** A name is all it needs.
+2. On the channel page, paste links into **Add videos**, one per line: Internet Archive items, YouTube videos or playlists, or a YouTube `@channel/live` address. Tick *I have permission to broadcast these* and press **Put on air**.
+
+Each link is imported (or reused if it's already in the library), test-played with FFprobe, approved, its playable source authorised, and added to the channel. The schedule updates straight away. Links that can't air are listed with the reason, e.g. a failed playback check, or YouTube playback switched off in Settings.
+
+The channel page lists everything on the channel with a plain **on air** or **⚠ reason** status. Reordering (▲▼), changing a role or removing an item rebuilds the upcoming schedule automatically; the programme on air now is kept.
+
+Elsewhere:
+- **Inbox:** what discovery rules found. **Put on air** and **Reject** work per item or on a selection. The fine-grained steps (approve only, authorise only, quarantine…) are under *More actions*.
+- **Find videos:** discovery rules. A rule with **Put new finds on air automatically** skips the inbox: each new find that passes the playback check goes straight onto the rule's channels. Finds that fail the check still go to the inbox.
+
+### Step by step
+
 1. **Discovery sources:** add Internet Archive rules (keyword, collection, creator, subject, year range, licensed-only) or YouTube rules (search, `@handle` uploads, playlist, single video), each with filters and a scan frequency. Rules can feed channels directly. *Import* takes a single URL.
 2. **Discovery** runs on schedule or on demand. It normalises metadata, groups Archive derivatives, flags duplicates, FFprobes the preferred file (codecs, duration, seekability) and queues everything as `PENDING_REVIEW`. It never approves anything.
    - **Per-rule preferences:** preferred formats (ordered, e.g. `h.264, mpeg4`) and preferred resolution decide which file is probed and aired.
@@ -160,7 +175,9 @@ POST /api/v1/channels/{id}/schedule/generate[?mode=extend|regenerate]
 GET  /api/v1/catchup/programmes[?channel_id=]
 GET  /api/v1/catchup/sessions             POST /api/v1/catchup/sessions   DELETE /api/v1/catchup/sessions/{id}
 GET  /api/v1/dashboard | /meta | /catalogue | /sources | /settings | /events
-POST /api/v1/media/bulk                   PATCH /api/v1/media/{id}       POST /api/v1/media/{id}/sources
+POST /api/v1/channels/{id}/links         POST /api/v1/media/{id}/air    POST /api/v1/channels/{id}/items/order
+POST /api/v1/media/bulk  (action "air" = approve + authorise + add to channel)
+PATCH /api/v1/media/{id}                  POST /api/v1/media/{id}/sources
 POST /api/v1/channels/{id}/items | /blocks | /logo                       GET  /api/v1/channels/{id}/schedule/versions
 POST /api/v1/schedule/entries/{id}/override                              POST /api/v1/local/import
 ```

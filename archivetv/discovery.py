@@ -13,9 +13,9 @@ from datetime import timedelta
 from typing import Any
 
 import httpx
-from sqlalchemy import select
+from sqlalchemy import or_, select
 
-from .catalogue import IPTV_TYPES, is_known, title_key, upsert_record
+from .catalogue import IPTV_TYPES, has_playable_source, is_known, put_on_air, title_key, upsert_record
 from .config import settings
 from .db import session_scope, utcnow
 from .enums import Eligibility, PlaybackType, ReviewStatus
@@ -35,6 +35,8 @@ class DiscoveryResult:
     filtered: int = 0
     errors: list[str] = field(default_factory=list)
     new_item_ids: list[int] = field(default_factory=list)
+    known_item_ids: list[int] = field(default_factory=list)  # already in the catalogue
+    aired: int = 0  # put on air automatically (rule with auto_air)
 
 
 def _csv(v: Any) -> list[str]:
@@ -119,6 +121,7 @@ async def run_query(
         res.found = len(stubs)
         with session_scope() as s:
             fresh = [st for st in stubs if not is_known(s, st.provider, st.external_id)]
+            res.known_item_ids = known_item_ids(s, [st for st in stubs if st not in fresh])
         res.skipped_known = len(stubs) - len(fresh)
         records = await provider.expand(fresh) if fresh else []
         record_success(provider_name)
@@ -154,9 +157,53 @@ async def run_query(
                         item.review_status = ReviewStatus.VALIDATING
                         to_validate.append(item.id)
     await validate_items(to_validate)
-    if res.new:
-        await notify(f"ArchiveTV: {res.new} new {provider.label} item(s) awaiting review")
+    if rule_id and params.get("auto_air") and res.new_item_ids:
+        res.aired = auto_air(rule_id, res.new_item_ids)
+    waiting = res.new - res.aired
+    if waiting:
+        await notify(f"ArchiveTV: {waiting} new {provider.label} item(s) awaiting review")
     return res
+
+
+def known_item_ids(s, stubs: list) -> list[int]:
+    """Catalogue ids of already-known stubs (matched like ``is_known``)."""
+    ids: list[int] = []
+    for st in stubs:
+        iid = s.scalar(
+            select(MediaItem.id).join(MediaSource).where(
+                MediaSource.provider == st.provider,
+                or_(MediaSource.external_id == st.external_id, MediaSource.parent_external_id == st.external_id),
+            ).limit(1)
+        )
+        if iid is not None and iid not in ids:
+            ids.append(iid)
+    return ids
+
+
+def auto_air(rule_id: int, item_ids: list[int]) -> int:
+    """A rule with ``auto_air`` puts what it finds straight on air: approve,
+    authorise validated sources, add to the rule's channels (via approval),
+    and refresh those channels' schedules. Returns how many can now air."""
+    from .scheduler import maintain
+
+    aired = 0
+    with session_scope() as s:
+        rule = s.get(DiscoveryRule, rule_id)
+        if rule is None:
+            return 0
+        actor = f"rule:{rule.name}"[:64]
+        for iid in item_ids:
+            item = s.get(MediaItem, iid)
+            if item is None or item.review_status in (ReviewStatus.REJECTED, ReviewStatus.QUARANTINED):
+                continue
+            if not has_playable_source(item):
+                continue  # failed the playback check: leave it in the inbox
+            if put_on_air(s, item, actor=actor, note="put on air automatically by discovery rule") == "eligible":
+                aired += 1
+        s.flush()
+        for ch in rule.channels:
+            maintain(s, ch)
+    return aired
 
 
 async def import_youtube_live(url: str) -> DiscoveryResult:
@@ -180,6 +227,7 @@ async def import_youtube_live(url: str) -> DiscoveryResult:
     with session_scope() as s:
         if is_known(s, "youtube", ext):
             res.skipped_known = 1
+            res.known_item_ids = known_item_ids(s, [MediaRecord(provider="youtube", external_id=ext, title=ext)])
             return res
         name = who if who.startswith("@") else who.split("/", 1)[-1]
         item = MediaItem(

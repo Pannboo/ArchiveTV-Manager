@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { api, qs, type ChannelDetail, type MediaSummary, type Paged, type Rule } from "../api";
-import { Act, Chip, Field, fmtDur, Loading, StatusChip, useLoad, useMeta } from "../ui";
+import { api, qs, type AirResult, type ChannelDetail, type LinkResult, type MediaSummary, type Paged, type Rule } from "../api";
+import {
+  Act, AirChip, airSummary, Chip, Field, fmtDur, inboxChanged, Loading, MODE_LABEL, StatusChip, useLoad, useMeta, useRemembered, useToast,
+} from "../ui";
 
 const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
@@ -10,29 +12,195 @@ export default function ChannelPage() {
   const ch = useLoad(() => api.get<ChannelDetail>(`/channels/${id}`), [id]);
   if (!ch.data) return <Loading error={ch.error} loading={ch.loading} />;
   const c = ch.data;
+  const airing = c.items.filter((i) => i.schedulable).length;
   return (
     <>
       <div className="spread">
-        <h1>{c.name} <span className="small muted"><code>{c.slug}</code></span></h1>
+        <h1>{c.name} {!c.enabled && <Chip cls="warn">disabled</Chip>}</h1>
         <span className="row">
-          <Link className="btn" to={`/schedule?channel=${c.id}`}>Schedule</Link>
-          <Act run={async () => api.post<{ added: number }>(`/channels/${c.id}/schedule/generate?mode=regenerate`)}
-            confirm="Rebuild all upcoming entries? The programme on air now is kept."
-            ok={(r) => `Schedule regenerated (${(r as { added: number }).added} entries).`}>Regenerate schedule</Act>
+          <Link className="btn" to={`/schedule?channel=${c.id}`}>View schedule</Link>
         </span>
       </div>
-      <div className="two">
-        <div>
-          <SettingsForm c={c} onSaved={ch.reload} />
-          <ItemsPanel c={c} setC={ch.setData} />
+      <p className="muted" style={{ marginTop: -8 }}>
+        {c.now_playing ? <>On now: <b>{c.now_playing}</b> · </> : null}
+        {airing} of {c.items.length} item{c.items.length === 1 ? "" : "s"} on air · {MODE_LABEL[c.mode] ?? c.mode}
+      </p>
+      <AddLinks channelId={c.id} onDone={ch.setData} />
+      <Playlist c={c} setC={ch.setData} />
+      <FromLibrary c={c} onDone={ch.reload} />
+      <details className="panel advanced">
+        <summary><b>Channel settings</b> <span className="small muted">name, number, logo, order, catch-up, time blocks, delete</span></summary>
+        <div className="two" style={{ marginTop: 12 }}>
+          <div>
+            <SettingsForm c={c} onSaved={ch.reload} />
+          </div>
+          <div>
+            <LogoPanel c={c} setC={ch.setData} />
+            <BlocksPanel c={c} setC={ch.setData} reload={ch.reload} />
+            <div className="panel">
+              <h3 style={{ marginTop: 0 }}>Rebuild schedule</h3>
+              <p className="small muted">Not normally needed: the schedule updates by itself whenever content is added or removed.</p>
+              <Act run={async () => api.post<{ added: number }>(`/channels/${c.id}/schedule/generate?mode=regenerate`)}
+                confirm="Rebuild all upcoming entries? The programme on air now is kept."
+                ok={(r) => `Schedule rebuilt (${(r as { added: number }).added} entries).`}>Rebuild now</Act>
+            </div>
+            <DeletePanel c={c} />
+          </div>
         </div>
-        <div>
-          <LogoPanel c={c} setC={ch.setData} />
-          <BlocksPanel c={c} setC={ch.setData} reload={ch.reload} />
-          <DeletePanel c={c} />
-        </div>
-      </div>
+      </details>
     </>
+  );
+}
+
+/** Paste links → imported, checked, approved, authorised and on this channel. */
+export function AddLinks({ channelId, onDone }: { channelId: number; onDone: (c: ChannelDetail) => void }) {
+  const meta = useMeta();
+  const notify = useToast();
+  const [text, setText] = useState("");
+  const [role, setRole] = useState("programme");
+  const [allowed, setAllowed] = useRemembered("atv:permission-confirmed", false);
+  const [busy, setBusy] = useState(false);
+  const [results, setResults] = useState<LinkResult[] | null>(null);
+  const urls = text.split(/\s+/).map((s) => s.trim()).filter(Boolean);
+  const submit = async () => {
+    setBusy(true);
+    try {
+      const r = await api.post<{ results: LinkResult[]; channel: ChannelDetail }>(`/channels/${channelId}/links`, { urls, role });
+      setResults(r.results);
+      onDone(r.channel);
+      inboxChanged();
+      // Keep only the links that didn't make it, so they can be fixed and retried.
+      setText(r.results.filter((x) => x.error || x.items.some((i) => !i.on_air)).map((x) => x.url).join("\n"));
+      const all = r.results.flatMap((x) => x.items);
+      const failed = r.results.filter((x) => x.error).length;
+      const s = airSummary(all);
+      notify(failed ? `${s.msg} ${failed} link${failed === 1 ? "" : "s"} couldn't be added.` : s.msg, s.ok && !failed ? "ok" : "error");
+    } catch (e) {
+      notify(e instanceof Error ? e.message : String(e), "error");
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="panel add-links">
+      <h3 style={{ marginTop: 0 }}>Add videos</h3>
+      <p className="small muted" style={{ marginTop: 0 }}>Paste links, one per line: Internet Archive items, YouTube videos or playlists, or a
+        YouTube <code>@channel/live</code> address. Each one is checked and goes straight on air. No separate approval step.</p>
+      {!meta.youtube_streaming && <p className="small warn-text">YouTube links need <b>Experimental: air YouTube videos</b> turned on
+        in <Link to="/settings">Settings</Link>. Archive links work without it.</p>}
+      <textarea value={text} onChange={(e) => setText(e.target.value)} rows={4} disabled={busy}
+        placeholder={"https://archive.org/details/…\nhttps://www.youtube.com/watch?v=…"} />
+      <div className="row" style={{ marginTop: 8 }}>
+        <label className="inline"><input type="checkbox" checked={allowed} onChange={(e) => setAllowed(e.target.checked)} />
+          I have permission to broadcast these</label>
+        <label className="inline small">as <select value={role} onChange={(e) => setRole(e.target.value)}>
+          {meta.roles.map((r) => <option key={r} value={r}>{r}</option>)}</select></label>
+        <button type="button" className="primary" disabled={busy || !urls.length || !allowed} onClick={submit}>
+          {busy ? `Checking ${urls.length} link${urls.length === 1 ? "" : "s"}…` : `Put ${urls.length || ""} on air`.replace("  ", " ")}
+        </button>
+        {busy && <span className="small muted">Each video is test-played first, so this can take a little while.</span>}
+      </div>
+      {results && (
+        <ul className="results">
+          {results.map((r) => r.error
+            ? <li key={r.url} className="bad"><span>✗</span> <span className="url">{r.url}</span> — {r.error}</li>
+            : r.items.map((i) => (
+              <li key={`${r.url}-${i.id}`} className={i.on_air ? "ok" : "warn"}><span>{i.on_air ? "✓" : "⚠"}</span>{" "}
+                <Link to={`/items/${i.id}`}>{i.title}</Link> — {i.on_air ? "on air" : i.problem}</li>
+            )))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+function Playlist({ c, setC }: { c: ChannelDetail; setC: (d: ChannelDetail) => void }) {
+  const meta = useMeta();
+  const notify = useToast();
+  const items = c.items;
+  const move = async (idx: number, dir: -1 | 1) => {
+    const ids = items.map((i) => i.id);
+    if (idx + dir < 0 || idx + dir >= ids.length) return;
+    [ids[idx], ids[idx + dir]] = [ids[idx + dir], ids[idx]];
+    setC(await api.post<ChannelDetail>(`/channels/${c.id}/items/order`, { item_ids: ids }));
+  };
+  return (
+    <div className="panel">
+      <div className="spread"><h3 style={{ margin: 0 }}>On this channel ({items.length})</h3>
+        <span className="small muted">{c.mode === "sequential" ? "Plays top to bottom, then starts again." : MODE_LABEL[c.mode] ?? c.mode}
+          {" "}Changes apply after the programme on air now.</span></div>
+      {!items.length && <p className="muted">Nothing here yet. Paste some links above.</p>}
+      <div className="playlist">
+        {items.map((i, idx) => (
+          <div key={i.id} className="pl-row">
+            <div className="pl-order">
+              <button type="button" title="Move up" disabled={idx === 0} onClick={() => move(idx, -1).catch((e) => notify(e.message, "error"))}>▲</button>
+              <button type="button" title="Move down" disabled={idx === items.length - 1} onClick={() => move(idx, 1).catch((e) => notify(e.message, "error"))}>▼</button>
+            </div>
+            {i.thumbnail_url ? <img className="pl-thumb" src={i.thumbnail_url} alt="" loading="lazy" /> : <div className="pl-thumb" />}
+            <div className="pl-main">
+              <Link to={`/items/${i.media_item_id}`}>{i.title ?? `#${i.media_item_id}`}</Link>
+              <div className="small muted">{i.provider ? meta.providers[i.provider] ?? i.provider : ""} · {i.live ? "live" : fmtDur(i.duration)}
+                {i.role !== "programme" && <> · {i.role}</>}</div>
+            </div>
+            <div className="pl-status">
+              <AirChip onAir={i.schedulable} problem={i.problem} live={i.live} />
+              {!i.schedulable && (
+                <Act className="primary" title="Approve it, authorise its playable source and add it to the schedule" run={async () => {
+                  const d = await api.post<{ air: AirResult }>(`/media/${i.media_item_id}/air`, { channel_id: c.id, role: i.role });
+                  setC(await api.get<ChannelDetail>(`/channels/${c.id}`));
+                  inboxChanged();
+                  if (!d.air.on_air) throw new Error(`Still can't air: ${d.air.problem}`);
+                }} ok="On air.">Put on air</Act>
+              )}
+              <select value={i.role} title="Role on this channel" onChange={async (e) => setC(await api.patch<ChannelDetail>(`/channels/${c.id}/items/${i.id}`, { role: e.target.value }))}>
+                {meta.roles.map((r) => <option key={r}>{r}</option>)}</select>
+              <Act className="danger" title="Remove from this channel (stays in your library)"
+                run={async () => setC(await api.del<ChannelDetail>(`/channels/${c.id}/items/${i.id}`))}>Remove</Act>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/** Pick things already in the library and put them on this channel in one go. */
+function FromLibrary({ c, onDone }: { c: ChannelDetail; onDone: () => void }) {
+  const notify = useToast();
+  const [open, setOpen] = useState(false);
+  const [q, setQ] = useState("");
+  const [pick, setPick] = useState<number[]>([]);
+  const lib = useLoad(() => (open ? api.get<Paged<MediaSummary>>(`/catalogue${qs({ q, per_page: 100, sort: "title" })}`) : Promise.resolve(null)), [q, open]);
+  const have = new Set(c.items.map((i) => i.media_item_id));
+  const rows = (lib.data?.items ?? []).filter((m) => !have.has(m.id) && m.review_status !== "REJECTED");
+  return (
+    <details className="panel advanced" onToggle={(e) => setOpen((e.target as HTMLDetailsElement).open)}>
+      <summary><b>Add from your library</b> <span className="small muted">videos ArchiveTV already knows about</span></summary>
+      <div className="toolbar" style={{ marginTop: 10 }}>
+        <input type="text" placeholder="Search your library… (Enter)" onKeyDown={(e) => e.key === "Enter" && setQ((e.target as HTMLInputElement).value)} />
+        <Act className="primary" disabled={!pick.length} run={async () => {
+          const r = await api.post<{ on_air: number; not_airing: AirResult[]; count: number }>("/media/bulk",
+            { ids: pick, action: "air", channel_id: c.id });
+          setPick([]);
+          onDone();
+          inboxChanged();
+          const s = airSummary([...Array(r.on_air).fill({ on_air: true, title: "", problem: null }), ...r.not_airing]);
+          notify(s.msg, s.ok ? "ok" : "error");
+        }}>Put {pick.length || ""} on air here</Act>
+      </div>
+      <Loading error={lib.error} loading={lib.loading && !lib.data} />
+      <div style={{ maxHeight: 300, overflow: "auto" }}>
+        {rows.map((m) => (
+          <label key={m.id} className="small" style={{ display: "flex", gap: 6, alignItems: "center" }}>
+            <input type="checkbox" checked={pick.includes(m.id)} onChange={(e) => setPick(e.target.checked ? [...pick, m.id] : pick.filter((x) => x !== m.id))} />
+            {m.title} <span className="muted">{fmtDur(m.duration)}</span>
+            {m.review_status !== "APPROVED" && <StatusChip s={m.review_status} />}
+          </label>
+        ))}
+        {lib.data && !rows.length && <p className="small muted">Nothing else in your library{q ? " matches" : ""}.</p>}
+      </div>
+    </details>
   );
 }
 
@@ -56,7 +224,7 @@ function SettingsForm({ c, onSaved }: { c: ChannelDetail; onSaved: () => void })
         <Field label="TVG ID"><input type="text" {...txt("tvg_id")} /></Field>
         <Field label="Group"><input type="text" {...txt("group_title")} /></Field>
         <Field label="Logo URL (an uploaded logo takes precedence)"><input type="url" {...txt("logo_url")} /></Field>
-        <Field label="Mode"><select value={f.mode} onChange={(e) => setF({ ...f, mode: e.target.value })}>{meta.modes.map((m) => <option key={m}>{m}</option>)}</select></Field>
+        <Field label="Order"><select value={f.mode} onChange={(e) => setF({ ...f, mode: e.target.value })}>{meta.modes.map((m) => <option key={m} value={m}>{MODE_LABEL[m] ?? m}</option>)}</select></Field>
         <Field label="Shuffle seed"><input type="text" {...txt("seed")} /></Field>
         <Field label="Avoid repeating last N items"><input type="number" min={0} value={f.repeat_avoid_count}
           onChange={(e) => setF({ ...f, repeat_avoid_count: Number(e.target.value) })} /></Field>
@@ -88,58 +256,6 @@ function SettingsForm({ c, onSaved }: { c: ChannelDetail; onSaved: () => void })
         });
         onSaved();
       }} ok="Channel saved. Upcoming entries update as content changes; Regenerate to rebuild now.">Save channel</Act></p>
-    </div>
-  );
-}
-
-function ItemsPanel({ c, setC }: { c: ChannelDetail; setC: (d: ChannelDetail) => void }) {
-  const meta = useMeta();
-  const [q, setQ] = useState("");
-  const [role, setRole] = useState("programme");
-  const [pick, setPick] = useState<number[]>([]);
-  const approved = useLoad(() => api.get<Paged<MediaSummary>>(`/catalogue${qs({ status: "APPROVED", q, per_page: 100, sort: "title" })}`), [q]);
-  const have = new Set(c.items.map((i) => i.media_item_id));
-  return (
-    <div className="panel">
-      <h3 style={{ marginTop: 0 }}>Content ({c.items.length})</h3>
-      <div className="scroll">
-        <table>
-          <thead><tr><th>Pos</th><th>Item</th><th>Role</th><th>Duration</th><th>Airs?</th><th></th></tr></thead>
-          <tbody>
-            {c.items.map((i) => (
-              <tr key={i.id}>
-                <td><input type="number" defaultValue={i.position} style={{ width: 64 }} onBlur={async (e) => {
-                  if (Number(e.target.value) !== i.position) setC(await api.patch<ChannelDetail>(`/channels/${c.id}/items/${i.id}`, { position: Number(e.target.value) }));
-                }} /></td>
-                <td><Link to={`/items/${i.media_item_id}`}>{i.title}</Link>{i.review_status && i.review_status !== "APPROVED" && <> <StatusChip s={i.review_status} /></>}</td>
-                <td><select value={i.role} onChange={async (e) => setC(await api.patch<ChannelDetail>(`/channels/${c.id}/items/${i.id}`, { role: e.target.value }))}>
-                  {meta.roles.map((r) => <option key={r}>{r}</option>)}</select></td>
-                <td className="small">{fmtDur(i.duration)}</td>
-                <td>{i.schedulable ? <Chip cls="ok">eligible</Chip> : <Chip cls="warn" >not eligible</Chip>}</td>
-                <td><Act className="danger" run={async () => setC(await api.del<ChannelDetail>(`/channels/${c.id}/items/${i.id}`))}>Remove</Act></td>
-              </tr>
-            ))}
-            {!c.items.length && <tr><td colSpan={6} className="muted">No content yet. Add approved items below.</td></tr>}
-          </tbody>
-        </table>
-      </div>
-      <h3>Add approved items</h3>
-      <div className="toolbar">
-        <input type="text" placeholder="Filter approved items…" onKeyDown={(e) => e.key === "Enter" && setQ((e.target as HTMLInputElement).value)} />
-        <select value={role} onChange={(e) => setRole(e.target.value)}>{meta.roles.map((r) => <option key={r}>{r}</option>)}</select>
-        <Act className="primary" disabled={!pick.length} run={async () => {
-          setC(await api.post<ChannelDetail>(`/channels/${c.id}/items`, { item_ids: pick, role }));
-          setPick([]);
-        }} ok="Added.">Add {pick.length} selected</Act>
-      </div>
-      <div style={{ maxHeight: 260, overflow: "auto" }}>
-        {approved.data?.items.filter((m) => !have.has(m.id)).map((m) => (
-          <label key={m.id} className="small" style={{ display: "flex", gap: 6 }}>
-            <input type="checkbox" checked={pick.includes(m.id)} onChange={(e) => setPick(e.target.checked ? [...pick, m.id] : pick.filter((x) => x !== m.id))} />
-            {m.title} <span className="muted">{fmtDur(m.duration)}</span> {m.schedulable ? null : <Chip cls="warn">{m.iptv_status}</Chip>}
-          </label>
-        ))}
-      </div>
     </div>
   );
 }
