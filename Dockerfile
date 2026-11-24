@@ -17,7 +17,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     ATV_PORT=8090
 
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ffmpeg fonts-dejavu-core tini curl nodejs \
+ && apt-get install -y --no-install-recommends ffmpeg fonts-dejavu-core fonts-dejavu-extra fontconfig tini curl nodejs \
  && rm -rf /var/lib/apt/lists/* \
  && useradd --system --uid 1000 --home /data --shell /usr/sbin/nologin archivetv
 

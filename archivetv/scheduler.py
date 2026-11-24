@@ -26,7 +26,7 @@ from sqlalchemy.orm import Session
 from .catalogue import best_iptv_source, is_schedulable, programme_duration, source_is_iptv_ok
 from .config import settings
 from .db import utcnow
-from .enums import ChannelRole, EntryKind, ScheduleMode
+from .enums import GENERATED_KINDS, ChannelRole, EntryKind, ScheduleMode
 from .models import Channel, ChannelBlock, MediaItem, PlaybackSource, ScheduleEntry, ScheduleVersion
 
 SLATE_MAX = timedelta(hours=1)
@@ -34,6 +34,7 @@ PAD_MAX = timedelta(minutes=20)  # largest gap before a block boundary we try to
 GRACE = timedelta(seconds=90)  # entries starting sooner than this are left alone on rebuilds
 MIN_DURATION = 1.0
 RECENT_KEEP = 200
+BREAK_MIN, BREAK_MAX = 4, 120  # seconds a generated break card may run
 
 
 @dataclass
@@ -205,11 +206,34 @@ class Generator:
         pick = self._sequential(pool, state, key) if mode == ScheduleMode.SEQUENTIAL else self._shuffle(pool, state)
         recent = list(state.get("recent", [])) + [pick.item.id]
         state["recent"] = recent[-RECENT_KEEP:]
-        out = [self._entry(t, pick, EntryKind.PROGRAMME, block, state, boundary)]
+        out: list[ScheduleEntry] = []
+        brk = self._break(t, pick, block, state)
+        if brk is not None:
+            out.append(brk)
+            t = brk.end
+        out.append(self._entry(t, pick, EntryKind.PROGRAMME, block, state, boundary))
         if self.ch.idents_between and self.pools[ChannelRole.IDENT]:
             ident = self._cycle(self.pools[ChannelRole.IDENT], state, "ident_idx")
             out.append(self._entry(out[-1].end, ident, EntryKind.IDENT, block, state))
         return out
+
+    def _break(self, t: datetime, nxt: Candidate, block: ChannelBlock | None, state: dict) -> ScheduleEntry | None:
+        """A generated "coming up" card before a programme (channel option).
+        Live programmes join at the live edge, so they get none."""
+        secs = int(self.ch.break_seconds or 0)
+        if not self.ch.breaks_enabled or secs <= 0 or nxt.live:
+            return None
+        secs = max(BREAK_MIN, min(secs, BREAK_MAX))
+        return ScheduleEntry(
+            channel_id=self.ch.id,
+            start=t,
+            end=t + timedelta(seconds=secs),
+            kind=EntryKind.BREAK,
+            title=f"Coming up: {nxt.item.title}",
+            description=None,
+            block_name=block.name if block else None,
+            state=_copy_state(state),
+        )
 
     def _entry(self, t: datetime, c: Candidate, kind: EntryKind, block: ChannelBlock | None, state: dict,
                boundary: datetime | None = None) -> ScheduleEntry:
@@ -307,7 +331,7 @@ def record_version(s: Session, channel: Channel, reason: str, changed_from: date
 
 
 def entry_still_valid(e: ScheduleEntry, s: Session) -> bool:
-    if e.kind == EntryKind.SLATE:
+    if e.kind in GENERATED_KINDS:
         return True
     if e.media_item_id is None:
         return False

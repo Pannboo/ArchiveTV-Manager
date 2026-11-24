@@ -1,4 +1,8 @@
-"""Uploaded channel logos.
+"""Channel logos: uploaded, linked, or generated.
+
+A channel's logo is, in order: an uploaded file, a logo URL (its own or its
+channel pack's), else one ArchiveTV draws in the channel's look (see
+``generate`` and marks.py), so every channel has a logo.
 
 Stored in ``<data>/logos`` (small, persistent, included in nothing else) and
 served at ``/logos/<file>``. Only raster formats identified by their magic
@@ -73,3 +77,24 @@ def url(channel, base: str | None) -> str | None:
     if channel.logo_file and base:
         return f"{base.rstrip('/')}/logos/{channel.logo_file}"
     return channel.logo_url
+
+
+def needs_generated(channel) -> bool:
+    """No uploaded file and no URL: the channel gets a generated logo."""
+    return not channel.logo_url and (not channel.logo_file or channel.logo_generated)
+
+
+def generate(s, channel, force: bool = False) -> str | None:
+    """Draw the channel's logo in its look and store it. Returns the file
+    name, or None when the channel inherits a logo (unless ``force``)."""
+    from . import marks, themes
+
+    if not force and not needs_generated(channel):
+        return None
+    look = themes.for_channel(s, channel)
+    text = (themes.pack_spec(s, channel) or {}).get("logo_text")
+    data = marks.render_mark(channel.name, channel.number, look, themes.accent(look, channel), text)
+    previous = channel.logo_file if (channel.logo_generated or force) else None
+    channel.logo_file = save(channel.slug, data, previous)
+    channel.logo_generated = True
+    return channel.logo_file

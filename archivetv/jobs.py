@@ -13,7 +13,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 from sqlalchemy import delete, or_, select, text
 
-from . import cache, monitor
+from . import cache, logos, monitor, packs
 from .catalogue import IPTV_TYPES
 from .config import settings
 from .db import backup_database, engine, session_scope, utcnow
@@ -41,6 +41,11 @@ async def discovery_tick() -> None:
 def schedule_tick() -> None:
     with session_scope() as s:
         for ch in s.scalars(select(Channel).where(Channel.enabled.is_(True))).all():
+            if not ch.logo_file and logos.needs_generated(ch):
+                try:
+                    logos.generate(s, ch)  # every channel gets a logo, drawn in its look
+                except Exception:  # noqa: BLE001 - a logo is never worth failing the schedule over
+                    log.exception("could not draw a logo for %s", ch.slug)
             r = maintain(s, ch)
             if r["rebuilt_from"] or r["added"]:
                 log.info("schedule %s: rebuilt_from=%s added=%s", ch.slug, r["rebuilt_from"], r["added"])
@@ -105,27 +110,63 @@ async def youtube_refresh_tick() -> None:
             log.info("refreshed %s YouTube records", n)
 
 
+# Slow-source downloads are planned this far ahead at most, and kept this
+# long after their airing ends (a viewer may still be finishing it).
+CACHE_PLAN_HOURS = 48
+CACHE_KEEP_AFTER = timedelta(minutes=10)
+
+
 async def cache_tick() -> None:
     if not settings.cache_active:
         return
     from .stream import manager
 
     now = utcnow()
-    urls = []
+    jobs: list[tuple[datetime, str]] = []  # (air time, url), soonest first
+    keep: set = set()
     with session_scope() as s:
-        for st in manager.status():
-            nxt = s.scalars(
-                select(ScheduleEntry)
-                .where(ScheduleEntry.channel_id == st["channel_id"], ScheduleEntry.start > now, ScheduleEntry.kind != EntryKind.SLATE)
+        watched = [st["channel_id"] for st in manager.status()]
+        if settings.cache_slow_sources and watched:
+            # Only channels being watched: nothing is fetched for a channel
+            # until someone tunes in, and its files go when they leave.
+            rows = s.scalars(
+                select(ScheduleEntry).join(Channel)
+                .where(Channel.enabled.is_(True), Channel.id.in_(watched), ScheduleEntry.kind != EntryKind.SLATE,
+                       ScheduleEntry.playback_source_id.is_not(None),
+                       ScheduleEntry.end > now - CACHE_KEEP_AFTER,
+                       ScheduleEntry.start < now + timedelta(hours=CACHE_PLAN_HOURS))
                 .order_by(ScheduleEntry.start)
-                .limit(2)
             ).all()
-            for e in nxt:
+            for e in rows:
                 ps = e.playback_source
-                if ps and ps.url and ps.allow_cache and ps.playback_type == "direct_url":
-                    urls.append(ps.url)
-    for u in urls:
-        asyncio.create_task(cache.prefetch(u))
+                if ps is None or not cache.must_wait(ps):
+                    continue
+                if (e.start - now).total_seconds() <= cache.lead_seconds(ps, (e.end - e.start).total_seconds()):
+                    jobs.append((e.start, ps.url))
+                    keep.add(cache.cache_path(ps.url))
+        if settings.cache_enabled:
+            for st in manager.status():
+                nxt = s.scalars(
+                    select(ScheduleEntry)
+                    .where(ScheduleEntry.channel_id == st["channel_id"], ScheduleEntry.start > now, ScheduleEntry.kind != EntryKind.SLATE)
+                    .order_by(ScheduleEntry.start)
+                    .limit(2)
+                ).all()
+                for e in nxt:
+                    ps = e.playback_source
+                    if ps and cache.wants(ps):
+                        jobs.append((e.start, ps.url))
+    if not settings.cache_enabled:
+        # Slow-source mode only: files whose airings are over, or whose
+        # channel nobody is watching any more, are deleted.
+        n = cache.sweep(keep) + cache.cancel_except({u for _, u in jobs})
+        if n:
+            log.info("dropped %d cached or downloading file(s) no longer needed", n)
+    seen: set[str] = set()
+    for _, u in sorted(jobs):
+        if u not in seen:
+            seen.add(u)
+            cache.start_prefetch(u)
 
 
 async def monitor_tick() -> None:
@@ -176,6 +217,7 @@ JOB_SPECS: list[tuple[str, int, Callable[[], Awaitable[None] | None], int]] = [
     # Runs in a worker thread so long rebuilds never stall live streams.
     ("schedule", 300, lambda: asyncio.to_thread(schedule_tick), 1),
     ("discovery", 60, discovery_tick, 20),
+    ("packs", 300, packs.fill_tick, 40),
     ("health", 900, health_tick, 60),
     ("live", 60, live_tick, 45),
     ("youtube_refresh", 6 * 3600, youtube_refresh_tick, 300),

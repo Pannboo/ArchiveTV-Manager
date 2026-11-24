@@ -1,0 +1,43 @@
+{
+  "format": 1,
+  "id": "newsreels",
+  "name": "Newsreels",
+  "number": 41,
+  "description": "Universal Newsreels, 1929-1967: the news as cinemas showed it.",
+  "look": "newsreel",
+  "logo_text": "NEWSREEL",
+  "order": "sequential",
+  "policy": "auto_air",
+  "target_hours": 60,
+  "public_domain_collections": [
+    "universal_newsreels"
+  ],
+  "break_seconds": 6,
+  "theme": "Cinema newsreels reporting current events, 1920s-1960s",
+  "rules": [
+    {
+      "name": "Universal Newsreels",
+      "params": {
+        "collection": "universal_newsreels",
+        "min_duration": 180,
+        "excluded_keywords": "sample",
+        "sort": "date asc"
+      }
+    },
+    {
+      "name": "YouTube: vintage newsreels",
+      "provider": "youtube",
+      "query": "vintage newsreel 1940s",
+      "params": {
+        "min_duration": 120,
+        "max_duration": 1800,
+        "embeddable_only": true,
+        "order": "viewCount",
+        "excluded_keywords": "trailer, reaction, review, explained, top 10"
+      },
+      "max_results": 25
+    }
+  ],
+  "author": "ArchiveTV starter packs",
+  "version": 2
+}

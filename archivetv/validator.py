@@ -64,6 +64,10 @@ def classify(probe: dict[str, Any], live: bool = False) -> tuple[Eligibility, di
         duration = float(fmt.get("duration") or (v or {}).get("duration") or 0) or None
     except ValueError:
         duration = None
+    try:
+        bit_rate = float(fmt.get("bit_rate") or 0) or None
+    except ValueError:
+        bit_rate = None
     info = {
         "container": fmt.get("format_name"),
         "video_codec": (v or {}).get("codec_name"),
@@ -72,6 +76,7 @@ def classify(probe: dict[str, Any], live: bool = False) -> tuple[Eligibility, di
         "height": (v or {}).get("height"),
         "duration": duration,
         "pix_fmt": (v or {}).get("pix_fmt"),
+        "bit_rate": bit_rate,
     }
     if not v:
         return Eligibility.UNAVAILABLE, info, "no video stream"
@@ -132,6 +137,40 @@ async def _range_supported(url: str) -> bool | None:
         return None
 
 
+SPEED_CHECK_MAX_BYTES = 16 * 1024 * 1024
+
+
+async def measure_throughput(url: str, seconds: float, max_bytes: int = SPEED_CHECK_MAX_BYTES) -> float | None:
+    """Sustained download speed of ``url`` in bytes per second, or None.
+
+    Reads for up to ``seconds`` (or ``max_bytes``) and discards the data.
+    Timing starts at the first body chunk so connection setup and time to
+    first byte don't count against the origin. ``url`` must already have
+    passed the media URL checks (redirects are not followed).
+    """
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(15), headers={"User-Agent": settings.http_user_agent}) as c:
+            async with c.stream("GET", url) as r:
+                if r.status_code not in (200, 206):
+                    return None
+                t0: float | None = None
+                got = 0
+                async for chunk in r.aiter_bytes(64 * 1024):
+                    now = time.monotonic()
+                    if t0 is None:
+                        t0 = now
+                        continue
+                    got += len(chunk)
+                    if now - t0 >= seconds or got >= max_bytes:
+                        break
+                if t0 is None or got == 0:
+                    return None
+                elapsed = time.monotonic() - t0
+                return got / elapsed if elapsed > 0.05 else None
+    except (httpx.HTTPError, OSError):
+        return None
+
+
 async def validate_source(ps: PlaybackSource) -> ProbeResult:
     """Probe a PlaybackSource and update its technical fields in place.
 
@@ -179,6 +218,15 @@ async def validate_source(ps: PlaybackSource) -> ProbeResult:
         ps.seekable = True
     else:
         ps.seekable = await _range_supported(target)
+    bit_rate = info["bit_rate"]
+    if not bit_rate and ps.size_bytes and info["duration"]:
+        bit_rate = ps.size_bytes * 8 / info["duration"]
+    ps.bitrate_kbps = round(bit_rate / 1000) if bit_rate and not ps.live else None
+    if (ps.playback_type == PlaybackType.DIRECT_URL and not ps.live and target.startswith("http")
+            and settings.speed_check_seconds > 0 and elig != Eligibility.UNAVAILABLE):
+        bps = await measure_throughput(target, settings.speed_check_seconds)
+        if bps is not None:  # a failed measurement keeps the previous one
+            ps.throughput_kbps = round(bps * 8 / 1000)
     ps.last_error = msg
     if elig in (Eligibility.IPTV_READY, Eligibility.IPTV_NEEDS_TRANSCODE):
         ps.failure_count = 0

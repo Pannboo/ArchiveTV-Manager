@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { api, IPTV_SOURCE_TYPES, qs, type Channel, type Source } from "../api";
-import { Act, Chip, EligChip, fmtDur, label, Loading, RightsChip, useLoad, useMeta, useTime } from "../ui";
+import { Act, Chip, EligChip, fmtDur, label, Loading, RightsChip, SpeedNote, useLoad, useMeta, useTime } from "../ui";
 
 export default function Sources() {
   const meta = useMeta();
@@ -37,6 +37,7 @@ export default function Sources() {
                 <td className="small"><Chip>{ps.type}</Chip><div style={{ wordBreak: "break-all" }}>{ps.label ?? ps.url ?? ps.local_path}</div></td>
                 <td className="small"><EligChip e={ps.eligibility} /> {ps.health_ok ? <Chip cls="ok">healthy</Chip> : <Chip cls="bad">failing</Chip>}
                   <div className="muted">{ps.video_codec ?? "?"}/{ps.audio_codec ?? "—"} · {fmtDur(ps.duration)} · checked {t(ps.last_validated_at)}</div>
+                  <SpeedNote ps={ps} />
                   {ps.last_error && <div className="muted">{ps.last_error.slice(0, 120)}</div>}</td>
                 <td className="small"><RightsChip r={ps.rights_status} /></td>
                 <td><input type="number" defaultValue={ps.priority} style={{ width: 70 }} onBlur={async (e) => {

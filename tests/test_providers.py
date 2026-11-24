@@ -137,10 +137,15 @@ def test_archive_helpers():
     assert 'collection:("classic_tv" OR "prelinger")' in q and "year:[1950 TO *]" in q and 'NOT "trailer"' in q
 
 
-def test_youtube_keyless_import_uses_oembed(session):
+def test_youtube_keyless_import_uses_oembed(session, monkeypatch):
     """Without an API key a single video is imported via official oEmbed:
-    preview-only, flagged, and never IPTV-eligible."""
+    preview-only, flagged, and never IPTV-eligible (with YouTube streaming
+    switched off, i.e. discovery-only mode)."""
     import asyncio
+
+    from archivetv.config import settings
+
+    monkeypatch.setattr(settings, "youtube_streaming", False)
 
     import httpx
 

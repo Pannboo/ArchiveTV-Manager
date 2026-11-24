@@ -18,7 +18,7 @@ from sqlalchemy import select
 from .catalogue import IPTV_TYPES, is_known, title_key, upsert_record
 from .config import settings
 from .db import session_scope, utcnow
-from .enums import Eligibility, PlaybackType, ReviewStatus
+from .enums import Eligibility, PlaybackType, ReviewStatus, RuleKind
 from .models import DiscoveryRule, MediaItem, MediaSource, PlaybackSource
 from .providers import MediaRecord, ProviderError, QuotaExhausted, get_provider
 from .quota import record_error, record_success
@@ -35,6 +35,7 @@ class DiscoveryResult:
     filtered: int = 0
     errors: list[str] = field(default_factory=list)
     new_item_ids: list[int] = field(default_factory=list)
+    auto_aired: int = 0  # put on air by a channel pack's policy
 
 
 def _csv(v: Any) -> list[str]:
@@ -108,14 +109,17 @@ async def run_query(
     max_results: int = 50,
     rule_id: int | None = None,
     interactive: bool = False,
+    preset: list[MediaRecord] | None = None,
 ) -> DiscoveryResult:
+    """Search (or take ``preset`` stubs, e.g. video ids from a channel's RSS
+    feed), then expand, filter, catalogue, validate and queue for review."""
     provider = get_provider(provider_name)
     res = DiscoveryResult()
     params = params or {}
     if hasattr(provider, "use_reserve"):
         provider.use_reserve = interactive
     try:
-        stubs = await provider.search(query, params, kind, max_results)
+        stubs = preset if preset is not None else await provider.search(query, params, kind, max_results)
         res.found = len(stubs)
         with session_scope() as s:
             fresh = [st for st in stubs if not is_known(s, st.provider, st.external_id)]
@@ -132,8 +136,10 @@ async def run_query(
         return res
 
     to_validate: list[int] = []
+    pack_rule = False
     with session_scope() as s:
         rule = s.get(DiscoveryRule, rule_id) if rule_id else None
+        pack_rule = bool(rule and rule.pack_id)
         for rec in records:
             ok, why = passes_filters(rec, params)
             if not ok:
@@ -154,15 +160,41 @@ async def run_query(
                         item.review_status = ReviewStatus.VALIDATING
                         to_validate.append(item.id)
     await validate_items(to_validate)
-    if res.new:
-        await notify(f"ArchiveTV: {res.new} new {provider.label} item(s) awaiting review")
+    if res.new_item_ids and settings.ai_enrich:
+        # Clean titles, tag and classify before anyone (or any pack) looks at them.
+        from . import ai
+
+        if ai.available():
+            await ai.enrich_items(res.new_item_ids)
+    if pack_rule and rule_id is not None:
+        # A channel pack's rule: apply the pack's policy (auto-air or review queue).
+        from .packs import after_validation
+
+        done = await after_validation(rule_id, res.new_item_ids)
+        res.auto_aired = done.get("aired", 0)
+        if provider_name == "youtube" and kind == "search":
+            # The channels behind these finds become suggestions to curate.
+            from .ytfollow import note_search_finds
+
+            await note_search_finds(rule_id, res.new_item_ids)
+    waiting = res.new - res.auto_aired
+    if waiting > 0:
+        await notify(f"ArchiveTV: {waiting} new {provider.label} item(s) awaiting review")
     return res
+
+
+async def run_ids(provider_name: str, ids: list[str], params: dict[str, Any] | None = None,
+                  rule_id: int | None = None) -> DiscoveryResult:
+    """Catalogue specific videos (e.g. new uploads seen in a followed
+    channel's RSS feed) through the normal discovery pipeline."""
+    stubs = [MediaRecord(provider=provider_name, external_id=i, title=i) for i in ids]
+    return await run_query(provider_name, RuleKind.VIDEO, None, params, len(ids), rule_id=rule_id, preset=stubs)
 
 
 async def import_youtube_live(url: str) -> DiscoveryResult:
     """Catalogue a YouTube channel's live address (``…/@handle/live``) as a
     live item. It follows whatever the channel is broadcasting now, so a
-    recurring stream with a new video id each time keeps working. Experimental
+    recurring stream with a new video id each time keeps working. Needs YouTube
     (ATV_YOUTUBE_STREAMING); it still needs approval and authorised rights."""
     from . import ytstream
 
@@ -172,7 +204,7 @@ async def import_youtube_live(url: str) -> DiscoveryResult:
         res.errors.append("not a YouTube channel /live address")
         return res
     if not settings.youtube_streaming:
-        res.errors.append("experimental YouTube streaming is switched off (ATV_YOUTUBE_STREAMING)")
+        res.errors.append("YouTube streaming is switched off (ATV_YOUTUBE_STREAMING)")
         return res
     who = live_url.split("youtube.com/", 1)[1].rsplit("/live", 1)[0]
     ext = f"live:{who}"
@@ -188,10 +220,10 @@ async def import_youtube_live(url: str) -> DiscoveryResult:
             title=f"{name} — YouTube live", title_key=title_key(f"{name} youtube live"), review_status=ReviewStatus.VALIDATING,
             tags=["live"], artwork_in_epg=False,
             flags=["Live stream from a YouTube channel's /live address: airs whenever the channel is live",
-                   "Experimental YouTube streaming: only authorise rights for streams you may rebroadcast"],
+                   "YouTube stream: only authorise rights for streams you may rebroadcast"],
         )
         item.playback_sources.append(PlaybackSource(
-            playback_type=PlaybackType.YOUTUBE_STREAM, url=live_url, label="YouTube live (channel, experimental)",
+            playback_type=PlaybackType.YOUTUBE_STREAM, url=live_url, label="YouTube live (channel)",
             live=True, priority=500, eligibility=Eligibility.UNVERIFIED))
         s.add(item)
         s.flush()
@@ -250,7 +282,8 @@ async def run_rule(rule_id: int, interactive: bool = False) -> DiscoveryResult:
 def due_rules() -> list[int]:
     now = utcnow()
     with session_scope() as s:
-        rules = s.scalars(select(DiscoveryRule).where(DiscoveryRule.enabled.is_(True))).all()
+        # Channel-pack rules are run by the pack's fill job (packs.fill_tick).
+        rules = s.scalars(select(DiscoveryRule).where(DiscoveryRule.enabled.is_(True), DiscoveryRule.pack_id.is_(None))).all()
         return [
             r.id
             for r in rules

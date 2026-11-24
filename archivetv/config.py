@@ -31,6 +31,13 @@ def _int(name: str, default: int) -> int:
         return default
 
 
+def _float(name: str, default: float) -> float:
+    try:
+        return float(_env(name, str(default)))  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return default
+
+
 def _bool(name: str, default: bool) -> bool:
     raw = _env(name)
     if raw is None:
@@ -73,10 +80,9 @@ class Settings:
     # may conflict with YouTube's Terms of Service and can break without notice.
     youtube_unofficial: bool = field(default_factory=lambda: _bool("ATV_YOUTUBE_UNOFFICIAL", False))
     youtube_unofficial_interval: int = field(default_factory=lambda: _int("ATV_YOUTUBE_UNOFFICIAL_INTERVAL", 2))
-    # Experimental proof of concept: let approved, rights-authorised YouTube
-    # items air by resolving their streams with yt-dlp at play time. Off by
-    # default; breaks the v2.0 specification's YouTube rule on purpose.
-    youtube_streaming: bool = field(default_factory=lambda: _bool("ATV_YOUTUBE_STREAMING", False))
+    # Air approved, rights-authorised YouTube items by resolving their streams
+    # with yt-dlp at play time. On by default; false makes YouTube discovery-only.
+    youtube_streaming: bool = field(default_factory=lambda: _bool("ATV_YOUTUBE_STREAMING", True))
     youtube_stream_max_height: int = field(default_factory=lambda: _int("ATV_YOUTUBE_STREAM_MAX_HEIGHT", 1080))
 
     timezone: ZoneInfo = field(default_factory=lambda: ZoneInfo(_env("ATV_DISPLAY_TZ", "Europe/London") or "Europe/London"))
@@ -99,6 +105,17 @@ class Settings:
     transcode_preset: str = field(default_factory=lambda: _env("ATV_TRANSCODE_PRESET", "veryfast") or "veryfast")
     transcode_height: int = field(default_factory=lambda: _int("ATV_TRANSCODE_HEIGHT", 720))
     transcode_video_bitrate: str = field(default_factory=lambda: _env("ATV_TRANSCODE_VBITRATE", "2500k") or "2500k")
+    # Seconds of output each channel may prepare ahead of real time, held in
+    # RAM and released to viewers at playback speed. Absorbs origin slowdowns
+    # (archive.org mirrors vary a lot) without writing media to disk. 0 = off.
+    readahead_seconds: int = field(default_factory=lambda: _int("ATV_READAHEAD_SECONDS", 20))
+    # Validation measures how fast a remote source downloads for this many
+    # seconds (0 = skip) and flags it as slow below bitrate × ratio.
+    speed_check_seconds: float = field(default_factory=lambda: _float("ATV_SPEED_CHECK_SECONDS", 6.0))
+    min_speed_ratio: float = field(default_factory=lambda: _float("ATV_MIN_SPEED_RATIO", 1.5))
+    # Remote files are fetched over this many parallel range requests through
+    # an in-RAM relay (archive.org limits speed per connection). 1 = off.
+    parallel_connections: int = field(default_factory=lambda: _int("ATV_PARALLEL_CONNECTIONS", 4))
 
     # Minimal-disk mode (default): nothing is ever downloaded or recorded to
     # disk; media is piped straight from the source through FFmpeg into RAM
@@ -106,6 +123,13 @@ class Settings:
     minimal_disk: bool = field(default_factory=lambda: _bool("ATV_DISABLE_MEDIA_RECORDING", True))
     cache_enabled: bool = field(default_factory=lambda: _bool("ATV_CACHE_ENABLED", False))
     cache_max_gb: int = field(default_factory=lambda: _int("ATV_CACHE_MAX_GB", 20))
+    # Optional fallback to the parallel relay (off by default): with
+    # minimal-disk mode off, sources the speed check flags as slow are
+    # downloaded to disk before they air on channels being watched, and
+    # deleted after. Downloads start this many hours ahead, or earlier when
+    # the measured speed says a file needs longer.
+    cache_slow_sources: bool = field(default_factory=lambda: _bool("ATV_CACHE_SLOW_SOURCES", False))
+    cache_lead_hours: int = field(default_factory=lambda: _int("ATV_CACHE_LEAD_HOURS", 3))
 
     # Resource monitoring thresholds (alerts on the dashboard, /health and webhook).
     db_max_mb: int = field(default_factory=lambda: _int("ATV_DB_MAX_MB", 512))
@@ -121,6 +145,37 @@ class Settings:
     # Allow media URLs that resolve to private/LAN addresses (e.g. a NAS).
     allow_private_media_hosts: bool = field(default_factory=lambda: _bool("ATV_ALLOW_PRIVATE_MEDIA_HOSTS", False))
 
+    # Creative Commons / public-domain music for break cards (see cards.py).
+    music_dir: Path = field(default_factory=lambda: Path(_env("ATV_MUSIC_DIR", "") or (Path(_env("ATV_MEDIA_DIR", "./media")) / "music")).resolve())
+    # Break-card font: a fontconfig pattern or a .ttf/.otf path (e.g. an
+    # OFL condensed display face such as Oswald dropped into the data dir).
+    card_font: str | None = field(default_factory=lambda: _env("ATV_CARD_FONT") or None)
+    # HLS output (/hls/<channel>/index.m3u8): segment length and window, in RAM.
+    hls_segment_seconds: float = field(default_factory=lambda: _float("ATV_HLS_SEGMENT_SECONDS", 4.0))
+    hls_window: int = field(default_factory=lambda: _int("ATV_HLS_WINDOW", 6))
+    # Public read-only guide API (/api/public/...) for web players and apps.
+    public_guide: bool = field(default_factory=lambda: _bool("ATV_PUBLIC_GUIDE", True))
+    # Lab mode for channel packs: an auto_air pack airs every playable find,
+    # Archive or YouTube, without the public-domain / Creative Commons check.
+    # For a private lab, where you decide what you may watch.
+    packs_air_everything: bool = field(default_factory=lambda: _bool("ATV_PACKS_AIR_EVERYTHING", False))
+    # AI helpers (ai.py): theme checks, title clean-up and tagging, channel
+    # vetting. Backend "local" is any OpenAI-compatible server on the lab
+    # network (Ollama, LM Studio, llama.cpp); "anthropic" is Claude; "none"
+    # turns them off. Keys are secrets: environment or Docker secret file only.
+    ai_backend: str = field(default_factory=lambda: (_env("ATV_AI_BACKEND") or "").strip().lower()
+                            or ("anthropic" if _env("ANTHROPIC_API_KEY") else "none"))
+    ai_base_url: str = field(default_factory=lambda: (_env("ATV_AI_BASE_URL", "http://127.0.0.1:11434/v1") or "").rstrip("/"))
+    ai_model: str = field(default_factory=lambda: _env("ATV_AI_MODEL", "qwen2.5:7b-instruct") or "qwen2.5:7b-instruct")
+    ai_api_key: str | None = field(default_factory=lambda: _env("ATV_AI_API_KEY") or None)  # local servers rarely need one
+    # Clean up titles, tag and classify every new find (free with a local model).
+    ai_enrich: bool = field(default_factory=lambda: _bool("ATV_AI_ENRICH", True))
+    anthropic_api_key: str | None = field(default_factory=lambda: _env("ANTHROPIC_API_KEY") or None)
+    theme_check_model: str = field(default_factory=lambda: _env("ATV_THEME_CHECK_MODEL", "claude-opus-5-5") or "claude-opus-5-5")
+    # YouTube keyword searches (100 quota units each, and a separate daily
+    # call limit) shared by every pack per day; followed channels cost ~1 unit.
+    youtube_search_budget: int = field(default_factory=lambda: _int("ATV_YOUTUBE_SEARCH_BUDGET", 30))
+
     notify_webhook_url: str | None = field(default_factory=lambda: _env("ATV_NOTIFY_WEBHOOK") or None)
     backup_keep: int = field(default_factory=lambda: _int("ATV_BACKUP_KEEP", 7))
     jobs_enabled: bool = field(default_factory=lambda: _bool("ATV_JOBS_ENABLED", True))
@@ -128,8 +183,8 @@ class Settings:
 
     @property
     def cache_active(self) -> bool:
-        """The prefetch cache writes media to disk, so minimal-disk mode vetoes it."""
-        return self.cache_enabled and not self.minimal_disk
+        """Any caching at all. It writes media to disk, so minimal-disk mode vetoes it."""
+        return (self.cache_enabled or self.cache_slow_sources) and not self.minimal_disk
 
     @property
     def db_path(self) -> Path:

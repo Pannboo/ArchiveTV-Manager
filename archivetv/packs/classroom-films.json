@@ -1,0 +1,53 @@
+{
+  "format": 1,
+  "id": "classroom-films",
+  "name": "Classroom Films",
+  "number": 31,
+  "description": "Educational, industrial and social-guidance films from the Prelinger Archives.",
+  "look": "classroom",
+  "logo_text": "CLASS",
+  "order": "shuffle",
+  "policy": "auto_air",
+  "target_hours": 120,
+  "public_domain_collections": [
+    "prelinger"
+  ],
+  "theme": "Educational, industrial, advertising and social-guidance films (ephemeral films), 1930s-1980s",
+  "rules": [
+    {
+      "name": "Prelinger Archives",
+      "params": {
+        "collection": "prelinger",
+        "min_duration": 300,
+        "max_duration": 4800,
+        "excluded_keywords": "trailer, teaser, sample, clip, preview",
+        "preferred_formats": "h.264, mpeg4"
+      }
+    },
+    {
+      "name": "Educational films",
+      "params": {
+        "collection": "educationalfilms",
+        "min_duration": 300,
+        "max_duration": 4800,
+        "excluded_keywords": "trailer, teaser, sample, clip, preview",
+        "preferred_formats": "h.264, mpeg4"
+      }
+    },
+    {
+      "name": "YouTube: educational & social-guidance films",
+      "provider": "youtube",
+      "query": "1950s educational film social guidance",
+      "params": {
+        "min_duration": 300,
+        "max_duration": 4800,
+        "embeddable_only": true,
+        "order": "viewCount",
+        "excluded_keywords": "trailer, reaction, review, explained, top 10"
+      },
+      "max_results": 25
+    }
+  ],
+  "author": "ArchiveTV starter packs",
+  "version": 2
+}

@@ -1,0 +1,48 @@
+{
+  "format": 1,
+  "id": "saturday-morning",
+  "name": "Saturday Morning",
+  "number": 23,
+  "description": "Somebody's VHS of a Saturday morning, commercials and all. Home recordings of broadcast TV are usually still under copyright, so finds wait for review.",
+  "look": "toon",
+  "logo_text": "SAT AM",
+  "order": "shuffle",
+  "policy": "inbox",
+  "target_hours": 60,
+  "theme": "Home VHS recordings of Saturday-morning children's television: cartoons with their original commercials and bumpers",
+  "rules": [
+    {
+      "name": "VHS Vault: Saturday morning",
+      "query": "\"saturday morning\" OR cartoons",
+      "params": {
+        "collection": "vhsvault",
+        "min_duration": 900,
+        "excluded_keywords": "sample, trailer"
+      }
+    },
+    {
+      "name": "YouTube: saturday morning VHS recordings",
+      "provider": "youtube",
+      "query": "saturday morning cartoons 1980s vhs recording",
+      "params": {
+        "min_duration": 900,
+        "max_duration": 14400,
+        "embeddable_only": true,
+        "order": "viewCount",
+        "excluded_keywords": "trailer, reaction, review, explained, top 10"
+      },
+      "max_results": 25
+    }
+  ],
+  "blocks": [
+    {
+      "name": "Saturday Morning",
+      "days": "56",
+      "start": "07:00",
+      "end": "12:00",
+      "tag_filter": "cartoons, saturday morning, saturday morning cartoons"
+    }
+  ],
+  "author": "ArchiveTV starter packs",
+  "version": 2
+}

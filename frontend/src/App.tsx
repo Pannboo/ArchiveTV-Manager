@@ -13,10 +13,11 @@ import Schedule from "./pages/Schedule";
 import Catchup from "./pages/Catchup";
 import Sources from "./pages/Sources";
 import Settings from "./pages/Settings";
+import Packs from "./pages/Packs";
 
 const NAV: [string, string][] = [
   ["/", "Dashboard"], ["/discovery", "Discovery sources"], ["/review", "Review queue"], ["/catalogue", "Catalogue"],
-  ["/channels", "Channels"], ["/schedule", "Schedule"], ["/catchup", "Catch-up"], ["/sources", "Playback sources"],
+  ["/channels", "Channels"], ["/packs", "Channel packs"], ["/schedule", "Schedule"], ["/catchup", "Catch-up"], ["/sources", "Playback sources"],
   ["/settings", "Settings"],
 ];
 
@@ -59,6 +60,7 @@ export default function App() {
           <Route path="/items/:id" element={<Item />} />
           <Route path="/channels" element={<Channels />} />
           <Route path="/channels/:id" element={<ChannelPage />} />
+          <Route path="/packs" element={<Packs />} />
           <Route path="/schedule" element={<Schedule />} />
           <Route path="/catchup" element={<Catchup />} />
           <Route path="/sources" element={<Sources />} />

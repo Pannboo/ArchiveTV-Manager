@@ -1,0 +1,40 @@
+{
+  "format": 1,
+  "id": "old-commercials",
+  "name": "Old Commercials",
+  "number": 32,
+  "description": "Reels of vintage television advertising. Rights are often unclear, so finds wait for review.",
+  "look": "vhs",
+  "logo_text": "ADS",
+  "order": "shuffle",
+  "policy": "inbox",
+  "target_hours": 30,
+  "break_seconds": 6,
+  "theme": "Vintage television commercials and advertising reels",
+  "rules": [
+    {
+      "name": "Classic TV commercials",
+      "params": {
+        "collection": "classic_tv_commercials",
+        "min_duration": 120,
+        "max_duration": 7200,
+        "excluded_keywords": "sample"
+      }
+    },
+    {
+      "name": "YouTube: vintage commercial reels",
+      "provider": "youtube",
+      "query": "1980s tv commercials compilation",
+      "params": {
+        "min_duration": 600,
+        "max_duration": 7200,
+        "embeddable_only": true,
+        "order": "viewCount",
+        "excluded_keywords": "trailer, reaction, review, explained, top 10"
+      },
+      "max_results": 25
+    }
+  ],
+  "author": "ArchiveTV starter packs",
+  "version": 2
+}

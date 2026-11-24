@@ -296,6 +296,8 @@ class YouTubeProvider(MediaProvider):
                     "videoDuration": duration,
                     "videoCategoryId": cats[0].strip() if len(cats) == 1 else None,
                     "videoEmbeddable": "true" if filters.get("embeddable_only") else None,
+                    # Creative Commons (CC BY) uploads only: the YouTube licence that permits reuse.
+                    "videoLicense": "creativeCommon" if filters.get("creative_commons_only") else None,
                     "order": filters.get("order") or "date",
                     "regionCode": filters.get("region") or "GB",
                     "safeSearch": filters.get("safe_search") or "moderate",
@@ -461,12 +463,12 @@ class YouTubeProvider(MediaProvider):
         )
 
 
-STREAM_FLAG = ("Experimental YouTube streaming is on: this item can air once approved, but only authorise its rights "
+STREAM_FLAG = ("YouTube streaming is on: this item can air once approved, but only authorise its rights "
                "if you are allowed to rebroadcast it")
 
 
 def with_stream_option(rec: MediaRecord) -> MediaRecord:
-    """Add the experimental yt-dlp stream source (ATV_YOUTUBE_STREAMING) to
+    """Add the yt-dlp stream source (ATV_YOUTUBE_STREAMING, on by default) to
     available, non-live videos. It still needs approval, a passing
     validation and explicitly authorised rights before anything airs."""
     if not settings.youtube_streaming or not rec.available:
@@ -475,7 +477,7 @@ def with_stream_option(rec: MediaRecord) -> MediaRecord:
         return rec  # added when the item is refreshed after it goes live
     rec.playback.append(PlaybackOption(
         playback_type=PlaybackType.YOUTUBE_STREAM, url=f"https://www.youtube.com/watch?v={rec.external_id}",
-        label="YouTube stream (experimental, yt-dlp)", eligibility=Eligibility.UNVERIFIED, iptv_capable=True, priority=500,
+        label="YouTube stream (yt-dlp)", eligibility=Eligibility.UNVERIFIED, iptv_capable=True, priority=500,
     ))
     # The "discovery only" note no longer applies once streaming is on.
     rec.flags = [f for f in rec.flags if f != DISCOVERY_ONLY_FLAG] + [STREAM_FLAG]

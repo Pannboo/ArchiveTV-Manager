@@ -29,7 +29,7 @@ def _token_qs() -> str:
     return f"?token={quote(settings.feed_token)}" if settings.feed_token else ""
 
 
-def build_m3u(s: Session, base_url: str) -> str:
+def build_m3u(s: Session, base_url: str, hls: bool = False) -> str:
     base = base_url.rstrip("/")
     lines = [f'#EXTM3U x-tvg-url="{base}/epg.xml{_token_qs()}" url-tvg="{base}/epg.xml{_token_qs()}"']
     for ch in published_channels(s):
@@ -44,7 +44,10 @@ def build_m3u(s: Session, base_url: str) -> str:
         if logo:
             attrs.append(f'tvg-logo="{_attr(logo)}"')
         lines.append(f"#EXTINF:-1 {' '.join(attrs)},{_attr(ch.name)}")
-        lines.append(f"{base}/live/{quote(ch.slug)}.ts{_token_qs()}")
+        if hls:
+            lines.append(f"{base}/hls/{quote(ch.slug)}/index.m3u8{_token_qs()}")
+        else:
+            lines.append(f"{base}/live/{quote(ch.slug)}.ts{_token_qs()}")
     return "\n".join(lines) + "\n"
 
 
@@ -80,7 +83,7 @@ def build_xmltv(s: Session, days: int | None = None, past_hours: float | None = 
         # so the guide stays gap-free without listing every station ident.
         slots: list[list] = []
         for e in entries:
-            short = e.kind in (EntryKind.IDENT, EntryKind.FILLER) and (e.end - e.start).total_seconds() < 120
+            short = e.kind in (EntryKind.IDENT, EntryKind.FILLER, EntryKind.BREAK) and (e.end - e.start).total_seconds() < 120
             if short and slots:
                 slots[-1][1] = e.end
             else:

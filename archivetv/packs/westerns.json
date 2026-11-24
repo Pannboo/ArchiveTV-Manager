@@ -1,0 +1,49 @@
+{
+  "format": 1,
+  "id": "westerns",
+  "name": "Westerns",
+  "number": 14,
+  "description": "Cowboys, outlaws and singing rangers: public-domain western features and serials.",
+  "look": "frontier",
+  "logo_text": "WEST",
+  "order": "shuffle",
+  "policy": "auto_air",
+  "target_hours": 150,
+  "theme": "Western feature films and serials: cowboys, frontier, outlaws, ranches",
+  "rules": [
+    {
+      "name": "Feature films: westerns",
+      "params": {
+        "collection": "feature_films",
+        "subject": "western; westerns",
+        "min_duration": 2700,
+        "max_duration": 10800,
+        "excluded_keywords": "trailer, teaser, sample, clip, preview",
+        "preferred_formats": "h.264, mpeg4"
+      }
+    },
+    {
+      "name": "YouTube: classic westerns",
+      "provider": "youtube",
+      "query": "classic western full movie",
+      "params": {
+        "min_duration": 2700,
+        "max_duration": 10800,
+        "embeddable_only": true,
+        "order": "viewCount",
+        "excluded_keywords": "trailer, reaction, review, explained, top 10"
+      },
+      "max_results": 25
+    }
+  ],
+  "blocks": [
+    {
+      "name": "Saturday Matinee",
+      "days": "5",
+      "start": "13:00",
+      "end": "18:00"
+    }
+  ],
+  "author": "ArchiveTV starter packs",
+  "version": 2
+}

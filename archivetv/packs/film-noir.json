@@ -1,0 +1,48 @@
+{
+  "format": 1,
+  "id": "film-noir",
+  "name": "Film Noir",
+  "number": 15,
+  "description": "Crime, detectives and doomed romance in black and white.",
+  "look": "noir",
+  "logo_text": "NOIR",
+  "order": "shuffle",
+  "policy": "auto_air",
+  "target_hours": 120,
+  "theme": "Film noir and crime dramas: detectives, gangsters, femmes fatales, mostly 1940s-1950s",
+  "rules": [
+    {
+      "name": "Film Noir collection",
+      "params": {
+        "collection": "Film_Noir",
+        "min_duration": 3000,
+        "max_duration": 10800,
+        "excluded_keywords": "trailer, teaser, sample, clip, preview",
+        "preferred_formats": "h.264, mpeg4"
+      }
+    },
+    {
+      "name": "YouTube: film noir features",
+      "provider": "youtube",
+      "query": "film noir full movie 1940s",
+      "params": {
+        "min_duration": 3000,
+        "max_duration": 10800,
+        "embeddable_only": true,
+        "order": "viewCount",
+        "excluded_keywords": "trailer, reaction, review, explained, top 10"
+      },
+      "max_results": 25
+    }
+  ],
+  "blocks": [
+    {
+      "name": "Late Show",
+      "days": "0123456",
+      "start": "23:00",
+      "end": "03:00"
+    }
+  ],
+  "author": "ArchiveTV starter packs",
+  "version": 2
+}

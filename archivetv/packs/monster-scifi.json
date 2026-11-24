@@ -1,0 +1,61 @@
+{
+  "format": 1,
+  "id": "monster-scifi",
+  "name": "Monster & Sci-Fi",
+  "number": 13,
+  "description": "Creature features, flying saucers and atomic-age B-movies from the Internet Archive's public-domain film collections.",
+  "look": "creature",
+  "logo_text": "MONSTER",
+  "order": "shuffle",
+  "policy": "auto_air",
+  "target_hours": 150,
+  "theme": "Monster, creature, horror and science-fiction feature films, mostly 1930s-1970s B-movies",
+  "rules": [
+    {
+      "name": "Sci-Fi / Horror collection",
+      "params": {
+        "collection": "SciFi_Horror",
+        "min_duration": 3000,
+        "max_duration": 10800,
+        "excluded_keywords": "trailer, teaser, sample, clip, preview",
+        "preferred_formats": "h.264, mpeg4"
+      }
+    },
+    {
+      "name": "Feature films: horror & sci-fi",
+      "query": "monster OR creature OR alien OR \"outer space\" OR zombie OR vampire",
+      "params": {
+        "collection": "feature_films",
+        "subject": "horror; science fiction; sci-fi",
+        "min_duration": 3000,
+        "max_duration": 10800,
+        "excluded_keywords": "trailer, teaser, sample, clip, preview",
+        "preferred_formats": "h.264, mpeg4"
+      }
+    },
+    {
+      "name": "YouTube: classic horror & sci-fi films",
+      "provider": "youtube",
+      "query": "classic horror movie full film 1950s",
+      "params": {
+        "min_duration": 3000,
+        "max_duration": 10800,
+        "embeddable_only": true,
+        "order": "viewCount",
+        "excluded_keywords": "trailer, reaction, review, explained, top 10"
+      },
+      "max_results": 25
+    }
+  ],
+  "blocks": [
+    {
+      "name": "Creature Feature",
+      "days": "45",
+      "start": "22:00",
+      "end": "02:00",
+      "tag_filter": "horror, monsters, monster"
+    }
+  ],
+  "author": "ArchiveTV starter packs",
+  "version": 2
+}

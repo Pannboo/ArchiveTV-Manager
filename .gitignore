@@ -30,6 +30,8 @@ archivetv/web/app/
 *.tsbuildinfo
 
 # --- Logs, editors, OS ------------------------------------------------------
+# Local Claude Code config (launch.json holds a dev password)
+.claude/
 *.log
 .idea/
 .vscode/

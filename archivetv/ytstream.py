@@ -1,6 +1,6 @@
-"""Experimental YouTube streaming (proof of concept; opt-in, off by default).
+"""YouTube streaming (on by default; ``ATV_YOUTUBE_STREAMING=false`` turns it off).
 
-With ``ATV_YOUTUBE_STREAMING=true``, YouTube items get a ``youtube_stream``
+YouTube items get a ``youtube_stream``
 playback source. yt-dlp resolves its current stream addresses at play time;
 FFmpeg reads them directly, exactly like any other remote source. Nothing is
 downloaded or cached. The item still airs only after the administrator has
@@ -131,7 +131,7 @@ def _expiry(url: str) -> float:
 async def resolve(url: str, fresh: bool = False) -> Resolved:
     """Current stream addresses for a YouTube video, validated like any media URL."""
     if not enabled():
-        raise UnsafeURLError("experimental YouTube streaming is disabled (ATV_YOUTUBE_STREAMING)")
+        raise UnsafeURLError("YouTube streaming is switched off (ATV_YOUTUBE_STREAMING)")
     key = cache_key(url)
     if not key:
         raise UnsafeURLError("not a YouTube video or channel /live URL")

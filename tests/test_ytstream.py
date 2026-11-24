@@ -1,4 +1,4 @@
-"""Experimental YouTube streaming (ATV_YOUTUBE_STREAMING): off by default,
+"""YouTube streaming (ATV_YOUTUBE_STREAMING): on by default, can be switched off,
 gated by approval and rights, and the resolver only ever hands FFmpeg
 validated googlevideo.com HTTPS addresses."""
 
@@ -38,9 +38,13 @@ def streaming(monkeypatch):
     return monkeypatch
 
 
-def test_disabled_by_default(monkeypatch):
+def test_on_by_default_and_can_be_switched_off(monkeypatch):
+    from archivetv.config import Settings
+
+    monkeypatch.delenv("ATV_YOUTUBE_STREAMING", raising=False)
+    assert Settings().youtube_streaming is True
     monkeypatch.setattr(settings, "youtube_streaming", False)
-    with pytest.raises(UnsafeURLError, match="disabled"):
+    with pytest.raises(UnsafeURLError, match="switched off"):
         asyncio.run(ytstream.resolve("https://youtu.be/jNQXAC9IVRw"))
     rec = MediaRecord(provider="youtube", external_id="jNQXAC9IVRw", title="t")
     assert with_stream_option(rec).playback == []

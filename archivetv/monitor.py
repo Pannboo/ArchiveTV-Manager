@@ -72,18 +72,22 @@ def cpu_percent() -> float | None:
 
 
 def stream_buffers(manager) -> dict:
-    """Bytes currently held in RAM: per-viewer queues plus keyframe caches."""
+    """Bytes currently held in RAM: read-ahead buffers, per-viewer queues and keyframe caches."""
     from .stream import READ_SIZE
 
-    queued = gop = viewers = 0
+    queued = gop = ahead = viewers = 0
     for st in list(manager.streams.values()) + list(manager.catchups.values()):
         if st.finished:
             continue
         gop += st.gop_bytes
+        ahead += st._buf_bytes
         for q in st.viewers:
             viewers += 1
             queued += q.qsize() * READ_SIZE
-    return {"queued_bytes": queued, "keyframe_cache_bytes": gop, "viewers": viewers}
+    from . import relay
+
+    return {"queued_bytes": queued, "keyframe_cache_bytes": gop, "readahead_bytes": ahead,
+            "relay_bytes": relay.stats()["relay_bytes"], "viewers": viewers}
 
 
 def ffmpeg_rss(manager) -> int:

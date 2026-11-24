@@ -12,6 +12,8 @@ interface SettingsData {
   media_dir: string;
   allowed_hosts: string[];
   minimal_disk: boolean;
+  cache_slow_sources?: boolean;
+  cache_enabled?: boolean;
   backups: string[];
 }
 
@@ -51,10 +53,11 @@ export default function Settings() {
           <p className="small muted">API keys and passwords come from environment variables or Docker secrets only. They are never stored in the
             database or sent to the browser.</p>
           <p className="small">Storage: {d.minimal_disk ? <><Chip cls="ok">minimal-disk mode</Chip> nothing is downloaded, cached to disk or recorded</>
-            : <Chip cls="warn">minimal-disk mode off</Chip>}</p>
+            : <><Chip cls="warn">minimal-disk mode off</Chip> {d.cache_slow_sources ? "slow sources are downloaded before they air and deleted afterwards" : "nothing is pre-downloaded"}{d.cache_enabled ? "; the next programmes of watched channels are cached" : ""}</>}</p>
           <p className="small">Media folder: <code>{d.media_dir}</code><br />Allowed remote media hosts: {d.allowed_hosts.map((h) => <code key={h}>{h} </code>)}
             <br /><span className="muted">Add hosts with <code>ATV_ALLOWED_MEDIA_HOSTS</code>. YouTube hosts can never be media sources.</span></p>
         </div>
+        <AIPanel />
         <div className="panel">
           <h3 style={{ marginTop: 0 }}>Backups</h3>
           <Act run={async () => { const r = await api.post<{ backup: string }>("/system/backup"); s.reload(); return r; }}
@@ -72,13 +75,47 @@ export default function Settings() {
               {" "}<span className="small muted">{x.help}</span></label>
           ) : (
             <Field key={x.key} label={x.label} hint={x.help}>
-              <input type={x.type === "int" ? "number" : "text"} value={vals[x.key] === null || vals[x.key] === undefined ? "" : String(vals[x.key])}
-                onChange={(e) => setVals({ ...vals, [x.key]: x.type === "int" ? (e.target.value === "" ? null : Number(e.target.value)) : e.target.value })} />
+              {x.key === "ai_backend" ? (
+                <select value={String(vals[x.key] ?? "none")} onChange={(e) => setVals({ ...vals, [x.key]: e.target.value })}>
+                  <option value="none">None</option>
+                  <option value="local">Local model on my network (OpenAI-compatible)</option>
+                  <option value="anthropic">Claude (ANTHROPIC_API_KEY)</option>
+                </select>
+              ) : <input type={x.type === "int" ? "number" : "text"} value={vals[x.key] === null || vals[x.key] === undefined ? "" : String(vals[x.key])}
+                onChange={(e) => setVals({ ...vals, [x.key]: x.type === "int" ? (e.target.value === "" ? null : Number(e.target.value)) : e.target.value })} />}
             </Field>
           ))}
         </div>
         <p><Act className="primary" run={async () => { await api.patch("/settings", vals); s.reload(); }} ok="Settings saved.">Save settings</Act></p>
       </div>
     </>
+  );
+}
+
+interface AIStatus { backend: "none" | "local" | "anthropic"; model: string | null; base_url: string | null; enrich: boolean;
+  enriched: number; catalogue: number }
+
+function AIPanel() {
+  const st = useLoad(() => api.get<AIStatus>("/ai"), []);
+  const a = st.data;
+  return (
+    <div className="panel">
+      <h3 style={{ marginTop: 0 }}>AI helpers</h3>
+      {!a ? <Loading error={st.error} loading={st.loading} /> : (
+        <>
+          <p className="small">Backend: {a.backend === "none" ? <Chip cls="warn">off</Chip>
+            : <><Chip cls="ok">{a.backend === "local" ? "local model" : "Claude"}</Chip> <code>{a.model}</code>
+              {a.base_url && <> at <code>{a.base_url}</code></>}</>}</p>
+          <p className="small muted">Used for pack theme checks, vetting suggested YouTube channels and, with clean-up on, tidying
+            titles, tagging finds for time blocks and holding back clips and trailers. Set it in Tunables below.</p>
+          <p className="small">Cleaned up: <b>{a.enriched}</b> of {a.catalogue} catalogue items.</p>
+          <div className="row">
+            <Act disabled={a.backend === "none"} run={async () => api.post("/ai/test")} ok="The AI backend answered.">Test connection</Act>
+            <Act disabled={a.backend === "none"} run={async () => { const r = await api.post<{ queued: number }>("/ai/enrich", { limit: 500 }); st.reload(); return r; }}
+              ok={(r) => `Cleaning up ${(r as { queued: number }).queued} item(s) in the background.`}>Clean up existing catalogue</Act>
+          </div>
+        </>
+      )}
+    </div>
   );
 }

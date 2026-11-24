@@ -27,6 +27,7 @@ export default function ChannelPage() {
           <ItemsPanel c={c} setC={ch.setData} />
         </div>
         <div>
+          <LookPanel c={c} />
           <LogoPanel c={c} setC={ch.setData} />
           <BlocksPanel c={c} setC={ch.setData} reload={ch.reload} />
           <DeletePanel c={c} />
@@ -40,12 +41,12 @@ function SettingsForm({ c, onSaved }: { c: ChannelDetail; onSaved: () => void })
   const meta = useMeta();
   const rules = useLoad(() => api.get<Rule[]>("/discovery/rules"), []);
   const init = () => ({ ...c, number: c.number?.toString() ?? "", logo_url: c.logo_url ?? "", description: c.description ?? "",
-    fallback_item_id: c.fallback_item_id?.toString() ?? "" });
+    fallback_item_id: c.fallback_item_id?.toString() ?? "", card_theme: c.card_theme ?? "auto" });
   const [f, setF] = useState(init);
   useEffect(() => setF(init()), [c.id]);
   const txt = (k: "name" | "tvg_id" | "group_title" | "logo_url" | "seed" | "description" | "number") =>
     ({ value: f[k] as string, onChange: (e: { target: { value: string } }) => setF({ ...f, [k]: e.target.value }) });
-  const chk = (k: "enabled" | "idents_between" | "filler_pad" | "catchup_enabled") =>
+  const chk = (k: "enabled" | "idents_between" | "filler_pad" | "catchup_enabled" | "breaks_enabled") =>
     ({ checked: f[k], onChange: (e: { target: { checked: boolean } }) => setF({ ...f, [k]: e.target.checked }) });
   return (
     <div className="panel">
@@ -65,11 +66,20 @@ function SettingsForm({ c, onSaved }: { c: ChannelDetail; onSaved: () => void })
         <Field label="Fallback programme"><select value={f.fallback_item_id} onChange={(e) => setF({ ...f, fallback_item_id: e.target.value })}>
           <option value="">— generated “off air” card —</option>
           {c.items.map((i) => <option key={i.id} value={i.media_item_id}>{i.title?.slice(0, 60)}</option>)}</select></Field>
+        <Field label="Look (break cards and drawn logo)"><select value={f.card_theme} onChange={(e) => setF({ ...f, card_theme: e.target.value })}>
+          {meta.looks.map((l) => <option key={l.key} value={l.key}>{l.label}</option>)}</select></Field>
+        <Field label="Break style"><select value={f.break_style} onChange={(e) => setF({ ...f, break_style: e.target.value as ChannelDetail["break_style"] })}>
+          <option value="auto">Automatic (from the look)</option>
+          <option value="bumper">Animated “Coming up next” bumper</option>
+          <option value="lineup">“Up next” lineup card</option></select></Field>
+        <Field label="Break card length (seconds)"><input type="number" min={4} max={120} value={f.break_seconds}
+          onChange={(e) => setF({ ...f, break_seconds: Number(e.target.value) })} /></Field>
         <Field label="Programme history (catch-up window)"><select value={f.catchup_days} onChange={(e) => setF({ ...f, catchup_days: Number(e.target.value) })}>
           {meta.retention_choices.map((d) => <option key={d} value={d}>{d} day{d > 1 ? "s" : ""}</option>)}</select></Field>
       </div>
       <Field label="Description"><textarea {...txt("description")} /></Field>
       <label className="inline"><input type="checkbox" {...chk("enabled")} /> Enabled (published in the feeds)</label>
+      <label className="inline"><input type="checkbox" {...chk("breaks_enabled")} /> “Up next” break card before each programme</label>
       <label className="inline"><input type="checkbox" {...chk("idents_between")} /> Station ident between programmes</label>
       <label className="inline"><input type="checkbox" {...chk("filler_pad")} /> Pad to block starts with filler</label>
       <label className="inline"><input type="checkbox" {...chk("catchup_enabled")} /> Catch-up and Start Over (nothing is recorded)</label>
@@ -85,6 +95,7 @@ function SettingsForm({ c, onSaved }: { c: ChannelDetail; onSaved: () => void })
           repeat_avoid_count: f.repeat_avoid_count, playback_format: f.playback_format, number: f.number ? Number(f.number) : null,
           fallback_item_id: f.fallback_item_id ? Number(f.fallback_item_id) : null, catchup_days: f.catchup_days, description: f.description || null,
           enabled: f.enabled, idents_between: f.idents_between, filler_pad: f.filler_pad, catchup_enabled: f.catchup_enabled, rule_ids: f.rule_ids,
+          breaks_enabled: f.breaks_enabled, break_seconds: f.break_seconds, card_theme: f.card_theme, break_style: f.break_style,
         });
         onSaved();
       }} ok="Channel saved. Upcoming entries update as content changes; Regenerate to rebuild now.">Save channel</Act></p>
@@ -144,13 +155,33 @@ function ItemsPanel({ c, setC }: { c: ChannelDetail; setC: (d: ChannelDetail) =>
   );
 }
 
+function LookPanel({ c }: { c: ChannelDetail }) {
+  const meta = useMeta();
+  const [v, setV] = useState(0);
+  useEffect(() => setV((x) => x + 1), [c.look, c.name, c.number]);
+  const look = meta.looks.find((l) => l.key === c.look)?.label ?? c.look;
+  return (
+    <div className="panel">
+      <div className="spread"><h3 style={{ margin: 0 }}>{c.break_style_resolved === "bumper" ? "Coming up next bumper" : "Up next card"}</h3>
+        <button type="button" onClick={() => setV(v + 1)}>Refresh</button></div>
+      <img key={v} src={`/api/v1/channels/${c.id}/card-preview.png?v=${v}`} alt={`Up next card for ${c.name}`}
+        style={{ width: "100%", aspectRatio: "16/9", borderRadius: 6, background: "var(--chip)", marginTop: 8 }} />
+      <p className="small muted">Look: <b>{look}</b>{c.card_theme === "auto" ? " (automatic)" : ""}. The next three programmes as the card shows them now
+        {c.break_style_resolved === "bumper" ? " (a still: on air the bumper animates and plays a few seconds of the next show)" : ""}.
+        {c.breaks_enabled ? ` Airs for ${c.break_seconds}s before each programme.` : " Break cards are off for this channel (see Settings)."}</p>
+    </div>
+  );
+}
+
 function LogoPanel({ c, setC }: { c: ChannelDetail; setC: (d: ChannelDetail) => void }) {
   const [file, setFile] = useState<File | null>(null);
+  const source = c.logo_file ? (c.logo_generated ? "Drawn in the channel’s look" : "Uploaded") : c.logo ? "From the logo URL" : null;
   return (
     <div className="panel">
       <h3 style={{ marginTop: 0 }}>Logo</h3>
-      {c.logo ? <img src={c.logo_file ? `/logos/${c.logo_file}` : c.logo} alt="" style={{ maxHeight: 64, background: "#fff2", borderRadius: 4, padding: 4 }} />
-        : <p className="small muted">No logo.</p>}
+      {c.logo ? <img src={c.logo_file ? `/logos/${c.logo_file}` : c.logo} alt={`${c.name} logo`} style={{ width: 128, height: 128, objectFit: "contain", borderRadius: 6 }} />
+        : <p className="small muted">No logo yet: one is drawn on the next schedule run.</p>}
+      {source && <p className="small muted">{source}. An upload wins, then a logo URL, otherwise ArchiveTV draws one.</p>}
       <div className="row" style={{ marginTop: 8 }}>
         <input type="file" accept="image/png,image/jpeg,image/webp" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
         <Act disabled={!file} run={async () => {
@@ -158,9 +189,13 @@ function LogoPanel({ c, setC }: { c: ChannelDetail; setC: (d: ChannelDetail) => 
           fd.append("file", file!);
           setC(await api.post<ChannelDetail>(`/channels/${c.id}/logo`, fd));
         }} ok="Logo uploaded. Refresh the account in Dispatcharr to pick it up.">Upload</Act>
-        {c.logo_file && <Act className="danger" run={async () => setC(await api.del<ChannelDetail>(`/channels/${c.id}/logo`))} ok="Uploaded logo removed.">Remove</Act>}
+        <Act run={async () => setC(await api.post<ChannelDetail>(`/channels/${c.id}/logo/generate`))}
+          confirm={c.logo_file && !c.logo_generated ? "Replace the uploaded logo with a drawn one?" : undefined}
+          ok="Logo drawn in the channel’s look.">{c.logo_generated ? "Redraw" : "Draw a logo"}</Act>
+        {c.logo_file && !c.logo_generated && <Act className="danger" run={async () => setC(await api.del<ChannelDetail>(`/channels/${c.id}/logo`))}
+          ok="Uploaded logo removed.">Remove upload</Act>}
       </div>
-      <p className="small muted">PNG, JPEG or WebP up to 1 MB. Used in the M3U, XMLTV and Xtream Codes feeds.</p>
+      <p className="small muted">PNG, JPEG or WebP up to 1 MB. Used in the M3U, XMLTV, Xtream Codes feeds and the public guide.</p>
     </div>
   );
 }

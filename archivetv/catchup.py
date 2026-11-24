@@ -122,7 +122,7 @@ def resolve_request(s, channel: Channel, start: datetime, duration: float | None
             cands = s.scalars(select(ScheduleEntry).where(
                 ScheduleEntry.channel_id == channel.id, ScheduleEntry.start > start,
                 ScheduleEntry.start <= start + timedelta(seconds=snap_seconds), ScheduleEntry.kind != EntryKind.SLATE,
-                ScheduleEntry.kind != EntryKind.IDENT).order_by(ScheduleEntry.start)).all()
+                ScheduleEntry.kind != EntryKind.IDENT, ScheduleEntry.kind != EntryKind.BREAK).order_by(ScheduleEntry.start)).all()
             if cands:
                 # Several programmes can start inside one minute (short clips).
                 # Dispatcharr's duration is the guide length + 5 min, so prefer
@@ -144,6 +144,11 @@ def resolve_request(s, channel: Channel, start: datetime, duration: float | None
     if start > now - LIVE_EDGE:
         raise CatchupError(416, "requested time is live or in the future")
     e = current_entry(s, channel.id, start)
+    if e is not None and e.kind == EntryKind.BREAK:
+        # A request landing on a break card means the programme after it.
+        nxt = current_entry(s, channel.id, e.end)
+        if nxt is not None:
+            e, start = nxt, nxt.start
     if e is None:
         raise CatchupError(404, "no programme was scheduled at that time")
     if e.kind == EntryKind.SLATE:
@@ -166,7 +171,10 @@ def start_over_time(s, channel: Channel, now: datetime | None = None) -> datetim
     """Start of the programme currently on air (for Start Over)."""
     now = now or utcnow()
     e = current_entry(s, channel.id, now)
-    if e is None or e.kind == EntryKind.SLATE:
+    if e is not None and e.kind == EntryKind.BREAK:
+        # During a break card, Start Over means the programme that just ended.
+        e = current_entry(s, channel.id, e.start - timedelta(seconds=1))
+    if e is None or e.kind in (EntryKind.SLATE, EntryKind.BREAK):
         raise CatchupError(404, "nothing is on air to start over")
     return e.start
 
@@ -225,6 +233,8 @@ class CatchupStream(ChannelStream):
             if remaining < 0.5:
                 self.emitted_until = e.end
                 return None
+            if e.kind == EntryKind.BREAK:
+                return self._break_plan(s, ch, e, pos, remaining, max(0.0, (pos - e.start).total_seconds()))
             unavailable = e.kind != EntryKind.SLATE and (e.id in self.failed_entries or _entry_source(e) is None)
             if e.kind == EntryKind.SLATE or unavailable:
                 label = f"{e.title} - unavailable" if unavailable else None

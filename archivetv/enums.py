@@ -46,7 +46,7 @@ class PlaybackType(StrEnum):
     YOUTUBE_EMBED = "youtube_embed"  # official embedded player only
     ARCHIVE_EMBED = "archive_embed"
     REFERENCE = "reference"  # link only
-    # Experimental, opt-in (ATV_YOUTUBE_STREAMING): resolved by yt-dlp at play time.
+    # YouTube video or live channel, resolved by yt-dlp at play time (ATV_YOUTUBE_STREAMING).
     YOUTUBE_STREAM = "youtube_stream"
 
 
@@ -74,6 +74,18 @@ class EntryKind(StrEnum):
     IDENT = "ident"
     FALLBACK = "fallback"
     SLATE = "slate"  # nothing eligible: generated "off air" card
+    BREAK = "break"  # generated "coming up" card between programmes
+
+
+# Entries made by ArchiveTV itself (no media item): cards, not programmes.
+GENERATED_KINDS = {EntryKind.SLATE, EntryKind.BREAK}
+
+
+class PackPolicy(StrEnum):
+    """What a channel pack does with what its rules find."""
+
+    AUTO_AIR = "auto_air"  # put on air without review, when the licence evidence allows it
+    INBOX = "inbox"  # always wait in the review queue
 
 
 class RuleKind(StrEnum):
