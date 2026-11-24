@@ -9,6 +9,8 @@ itsdangerous==2.2.0
 python-multipart==0.0.33
 tzdata==2026.6
 ytscrape==2.2.0
+# Optional channel-pack theme check (only used when ANTHROPIC_API_KEY is set).
+anthropic==2.13.0
 # Experimental YouTube streaming (ATV_YOUTUBE_STREAMING). Keep current: YouTube changes often.
 yt-dlp==2026.10.26
 yt-dlp-ejs==0.8.0

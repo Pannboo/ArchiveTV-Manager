@@ -1,0 +1,41 @@
+{
+  "format": 1,
+  "id": "sitcoms",
+  "name": "Sitcoms",
+  "number": 22,
+  "description": "Classic television comedy. Rights vary by episode, so finds wait for review.",
+  "look": "vhs",
+  "logo_text": "SITCOM",
+  "order": "shuffle",
+  "policy": "inbox",
+  "target_hours": 80,
+  "theme": "Television situation comedies and comedy shows, 1950s-1980s",
+  "rules": [
+    {
+      "name": "Classic TV: comedy",
+      "query": "sitcom OR comedy",
+      "params": {
+        "collection": "classic_tv",
+        "min_duration": 1200,
+        "max_duration": 3900,
+        "excluded_keywords": "trailer, teaser, sample, clip, preview",
+        "preferred_formats": "h.264, mpeg4"
+      }
+    },
+    {
+      "name": "YouTube: classic sitcom episodes",
+      "provider": "youtube",
+      "query": "classic sitcom full episode 1960s",
+      "params": {
+        "min_duration": 1200,
+        "max_duration": 3900,
+        "embeddable_only": true,
+        "order": "viewCount",
+        "excluded_keywords": "trailer, reaction, review, explained, top 10"
+      },
+      "max_results": 25
+    }
+  ],
+  "author": "ArchiveTV starter packs",
+  "version": 2
+}

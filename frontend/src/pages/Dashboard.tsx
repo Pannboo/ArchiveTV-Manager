@@ -18,7 +18,7 @@ interface Dash {
   catchup: { session_id: string; programme: string }[];
   resources: {
     alerts: string[]; cpu_percent: number | null; memory: { process_rss: number; cgroup_used?: number; cgroup_limit?: number };
-    ffmpeg_rss_bytes: number; ffmpeg_processes: number; buffers: { queued_bytes: number; keyframe_cache_bytes: number };
+    ffmpeg_rss_bytes: number; ffmpeg_processes: number; buffers: { queued_bytes: number; keyframe_cache_bytes: number; readahead_bytes?: number; relay_bytes?: number };
     database_bytes: number; tmp: { percent: number }; minimal_disk: boolean;
   };
   jobs: Record<string, { last_run: string | null; next_run: string | null }>;
@@ -56,7 +56,7 @@ export default function Dashboard() {
       <div className="panel small">
         <b>Resources</b> · CPU {r.cpu_percent ?? "—"}% of a core · memory {fmtBytes(r.memory.cgroup_used ?? r.memory.process_rss)}
         {r.memory.cgroup_limit ? ` of ${fmtBytes(r.memory.cgroup_limit)}` : ""} (FFmpeg {fmtBytes(r.ffmpeg_rss_bytes)}, {r.ffmpeg_processes} process
-        {r.ffmpeg_processes === 1 ? "" : "es"}) · stream buffers {fmtBytes(r.buffers.queued_bytes + r.buffers.keyframe_cache_bytes)} in RAM ·
+        {r.ffmpeg_processes === 1 ? "" : "es"}) · stream buffers {fmtBytes(r.buffers.queued_bytes + r.buffers.keyframe_cache_bytes + (r.buffers.readahead_bytes ?? 0) + (r.buffers.relay_bytes ?? 0))} in RAM ·
         database {fmtBytes(r.database_bytes)} · temp {r.tmp.percent}% ·{" "}
         {r.minimal_disk ? <Chip cls="ok">minimal-disk: no media written</Chip> : <Chip cls="warn">disk cache allowed</Chip>}
       </div>

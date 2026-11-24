@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api, IPTV_SOURCE_TYPES, type Channel, type MediaDetail, type MediaSummary, type Source } from "../api";
-import { Act, Chip, EligChip, Field, fmtBytes, fmtDur, IptvChip, label, Loading, Preview, RightsChip, StatusChip, useLoad, useMeta, useTime } from "../ui";
+import { Act, Chip, EligChip, Field, fmtBytes, fmtDur, IptvChip, label, Loading, Preview, RightsChip, SpeedNote, StatusChip, useLoad, useMeta, useTime } from "../ui";
 
 interface History {
   history: { at: string; actor: string; action: string; from: string | null; to: string | null; note: string | null }[];
@@ -154,6 +154,7 @@ function SourcesPanel({ it, bestId, reload }: { it: MediaDetail; bestId: number 
                   {ps.live ? <> <Chip cls="bad">● live</Chip></> : ps.seekable === false && <> <Chip cls="warn">no seek</Chip></>}
                   <div className="muted">{ps.video_codec ?? "?"}/{ps.audio_codec ?? "—"} {ps.width ? `${ps.width}×${ps.height}` : ""} · {fmtDur(ps.duration)}
                     {ps.size_bytes ? ` · ${fmtBytes(ps.size_bytes)}` : ""}</div>
+                  <SpeedNote ps={ps} />
                   <div className="muted">checked {t(ps.last_validated_at)}{ps.last_error && ` — ${ps.last_error.slice(0, 140)}`}</div></td>
                 <td className="small"><RightsChip r={ps.rights_status} />{ps.rights_note && <div className="muted">{ps.rights_note}</div>}
                   {IPTV_SOURCE_TYPES.includes(ps.type) && (

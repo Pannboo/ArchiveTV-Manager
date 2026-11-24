@@ -9,6 +9,11 @@ continuous transport stream to Dispatcharr.
 
 Position is derived from the wall clock and the persisted schedule, so after
 a restart a channel resumes exactly where the guide says it should be.
+
+FFmpeg may run up to ``settings.readahead_seconds`` ahead of real time. Its
+output waits in a bounded RAM buffer and a pacer releases it to viewers at
+playback speed (keyed on PES timestamps), so a slow or stalling origin
+drains the buffer instead of starving viewers. Nothing is written to disk.
 """
 
 from __future__ import annotations
@@ -19,6 +24,8 @@ import os
 import re
 import resource
 import signal
+import time
+from collections import deque
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -28,11 +35,11 @@ from sqlalchemy.exc import OperationalError
 
 from .config import settings
 from .db import session_scope, utcnow
-from .enums import EntryKind, Eligibility, PlaybackFormat, PlaybackType
+from .enums import GENERATED_KINDS, EntryKind, Eligibility, PlaybackFormat, PlaybackType
 from .models import Channel, PlaybackEvent, PlaybackSource, ScheduleEntry, StreamSession
 from .scheduler import current_entry, extend, maintain, record_version, truncate_from
 from .security import FFMPEG_PROTOCOLS
-from . import ytstream
+from . import cache, cards, relay, ytstream
 from .validator import forget_target, playable_target
 
 log = logging.getLogger(__name__)
@@ -49,11 +56,28 @@ PTS_WRAP = 2**33 / 90000
 # land before the previous segment's last ones (covers a multi-frame audio PES).
 SEGMENT_TS_MARGIN = 0.2
 RESOLVE_ATTEMPTS = 3
-TARGET_LEAD = 3.0  # seconds of output kept ahead of real time
+TARGET_LEAD = 3.0  # seconds of output viewers receive ahead of real time
+# Read-ahead buffer (see module docstring). FFmpeg is paused once the buffer
+# holds this much beyond its target, or this many bytes, whichever is first.
+READAHEAD_SLACK = 5.0
+READAHEAD_MAX_BYTES = 64 * 1024 * 1024
+MAX_READAHEAD = 120
+# Output arriving this many seconds after it was due means the buffer ran
+# dry; the pacer restarts its clock there instead of bursting to catch up.
+UNDERRUN_SLACK = 1.0
+# After a stall FFmpeg reads at up to this multiple of real time to rebuild
+# its lead (FFmpeg >= 8 needs it spelled out; older builds catch up anyway).
+READRATE_CATCHUP = 4
 SHORTFALL_TOLERANCE = 3.0
 SLATE_SEGMENT = 30.0
 REPLACEMENT_HORIZON_DAYS = 0.25
 MAX_PREROLL = 30.0  # cap on keyframe pre-roll compensation (very long GOPs)
+# A mid-programme join is measured with a short unpaced trial run first.
+TRIAL_SECONDS = 1.0
+TRIAL_TIMEOUT = 20.0
+# The trial's timestamp offset: well above MAX_PREROLL, so pre-roll packets
+# never go negative (the muxer would quietly shift them and hide the overlap).
+TRIAL_BASE = 60.0
 # FFmpeg failures worth retrying before failing over (busy mirrors, throttling, blips).
 TRANSIENT = re.compile(r"5XX|Server Error|429|Too Many Requests|timed out|Connection reset|Connection timed|Broken pipe", re.I)
 TRANSIENT_RETRIES = 2
@@ -80,6 +104,17 @@ class SegmentPlan:
     user_agent: str | None = None  # per-source HTTP user agent override
     source_url: str | None = None
     live: bool = False  # live source: join at the live edge, no seek, no pacing
+    cache_only: bool = False  # slow source: air only from the finished download
+    card: "cards.CardSpec | None" = None  # generated break card (see cards.py)
+    render: "cards.CardRender | None" = None  # the card's FFmpeg inputs, built per run
+
+
+def readahead() -> float:
+    """The configured read-ahead, clamped to something sane (it is admin-editable)."""
+    try:
+        return float(min(max(0, settings.readahead_seconds), MAX_READAHEAD))
+    except TypeError:
+        return 0.0
 
 
 def _sanitize_text(s: str) -> str:
@@ -93,6 +128,12 @@ class StreamManager:
         self.catchups: dict[str, ChannelStream] = {}  # catch-up sessions by id (see catchup.py)
         self._lock = asyncio.Lock()
         self._drawtext: bool | None = None
+        self._gradients: bool | None = None
+        # Off once a card failed to render (e.g. a missing font): breaks then
+        # fall back to the plain slate rather than failing over and over.
+        self.cards_ok = True
+        self.bad_clips: set[str] = set()  # preview sources that failed: bumpers fall back to the thumbnail
+        self._readrate_catchup: bool | None = None
         self._pids: set[int] = set()
 
     # -- process bookkeeping ---------------------------------------------------
@@ -148,6 +189,32 @@ class StreamManager:
             except OSError:
                 self._drawtext = False
         return self._drawtext
+
+    async def gradients_available(self) -> bool:
+        """The lavfi ``gradients`` source (FFmpeg >= 5.1) for card backgrounds."""
+        if self._gradients is None:
+            try:
+                p = await asyncio.create_subprocess_exec(
+                    settings.ffmpeg_path, "-hide_banner", "-filters", stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL
+                )
+                out, _ = await p.communicate()
+                self._gradients = b" gradients " in out
+            except OSError:
+                self._gradients = False
+        return self._gradients
+
+    async def readrate_catchup_available(self) -> bool:
+        """FFmpeg >= 8 has -readrate_catchup (and needs it to rebuild a lost lead)."""
+        if self._readrate_catchup is None:
+            try:
+                p = await asyncio.create_subprocess_exec(
+                    settings.ffmpeg_path, "-hide_banner", "-h", "full", stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL
+                )
+                out, _ = await p.communicate()
+                self._readrate_catchup = b"-readrate_catchup" in out
+            except OSError:
+                self._readrate_catchup = False
+        return self._readrate_catchup
 
     # -- streams ---------------------------------------------------------------
 
@@ -213,6 +280,17 @@ class ChannelStream:
         self._db_down = False
         self._transient: dict[int | None, int] = {}  # entry id -> consecutive transient failures
         self.session_id: int | None = None
+        # Read-ahead buffer: FFmpeg output not yet released, as (chunk, PTS).
+        self._buf: deque[tuple[bytes, float | None]] = deque()
+        self._buf_bytes = 0
+        self._buf_last_pts: float | None = None
+        self._has_data = asyncio.Event()
+        self._has_space = asyncio.Event()
+        self._anchor: tuple[float, float] | None = None  # (monotonic time, PTS) the pacer clock runs from
+        self._released_pts: float | None = None
+        self._pacer: asyncio.Task | None = None
+        self.underruns = 0
+        self._waiting_for: int | None = None  # entry shown as "downloading" (logged once)
 
     def _now(self) -> datetime:
         """Schedule time the output should currently be at (wall clock for live)."""
@@ -247,17 +325,15 @@ class ChannelStream:
             await self.stop()
 
     def _track_gop(self, chunk: bytes) -> None:
+        """Keep PSI and the output since the last keyframe (for joining viewers)."""
         key_at = None
         for off in range(0, len(chunk), TS_PACKET):
             b1, b2, b3 = chunk[off + 1], chunk[off + 2], chunk[off + 3]
             pid = ((b1 & 0x1F) << 8) | b2
             if pid in (0, PMT_PID) and b1 & 0x40:
                 self.psi[pid] = chunk[off : off + TS_PACKET]
-            elif pid in (VIDEO_PID, AUDIO_PID):
-                if pid == VIDEO_PID and (b3 & 0x20) and chunk[off + 4] > 0 and chunk[off + 5] & 0x40:
-                    key_at = off  # adaptation field random_access_indicator
-                if b1 & 0x40:
-                    self._note_pts(chunk, off, b3)
+            elif pid == VIDEO_PID and (b3 & 0x20) and chunk[off + 4] > 0 and chunk[off + 5] & 0x40:
+                key_at = off  # adaptation field random_access_indicator
         if key_at is not None:
             tail = chunk[key_at:]
             self.gop, self.gop_bytes = [tail], len(tail)
@@ -267,18 +343,94 @@ class ChannelStream:
             if self.gop_bytes > GOP_CACHE_BYTES:
                 self.gop, self.gop_bytes = [], 0
 
-    def _note_pts(self, chunk: bytes, off: int, b3: int) -> None:
-        """Track the highest PES PTS emitted in the current segment."""
-        start = off + 4 + ((1 + chunk[off + 4]) if b3 & 0x20 else 0)
-        h = chunk[start : start + 14]
-        if len(h) < 14 or h[0:3] != b"\x00\x00\x01" or not (h[7] & 0x80):
-            return
-        pts = ((h[9] >> 1) & 7) << 30 | h[10] << 22 | (h[11] >> 1) << 15 | h[12] << 7 | h[13] >> 1
-        secs = pts / 90000
+    def _pes_pts(self, chunk: bytes, off: int, b3: int) -> float | None:
+        """PTS (seconds, unwrapped) of the PES starting in the packet at ``off``."""
+        secs = raw_pes_pts(chunk, off, b3)
+        if secs is None:
+            return None
         base = self.ts_offset + MUX_START
-        secs += round((base - secs) / PTS_WRAP) * PTS_WRAP  # unwrap 33-bit PTS
-        if self.seg_max_pts is None or secs > self.seg_max_pts:
-            self.seg_max_pts = secs
+        return secs + round((base - secs) / PTS_WRAP) * PTS_WRAP  # unwrap 33-bit PTS
+
+    def _scan_pts(self, chunk: bytes) -> float | None:
+        """Highest PES PTS in a chunk of FFmpeg output; also tracks the segment's maximum."""
+        top = None
+        for off in range(0, len(chunk), TS_PACKET):
+            b1 = chunk[off + 1]
+            if b1 & 0x40 and (((b1 & 0x1F) << 8) | chunk[off + 2]) in (VIDEO_PID, AUDIO_PID):
+                secs = self._pes_pts(chunk, off, chunk[off + 3])
+                if secs is not None and (top is None or secs > top):
+                    top = secs
+        if top is not None and (self.seg_max_pts is None or top > self.seg_max_pts):
+            self.seg_max_pts = top
+        return top
+
+    # -- read-ahead buffer -----------------------------------------------------
+
+    def _enqueue(self, chunk: bytes) -> None:
+        pts = self._scan_pts(chunk)
+        if pts is None:
+            pts = self._buf_last_pts  # no PES starts in this chunk: it belongs with the previous one
+        else:
+            self._buf_last_pts = pts
+        self._buf.append((chunk, pts))
+        self._buf_bytes += len(chunk)
+        self._has_data.set()
+
+    def buffered_ahead(self) -> float:
+        """Seconds of output held beyond what viewers should be playing now."""
+        if not self._buf or self._buf_last_pts is None:
+            return 0.0
+        if self._anchor is None:
+            first = next((p for _, p in self._buf if p is not None), self._buf_last_pts)
+            return max(0.0, self._buf_last_pts - first)
+        playhead = self._anchor[1] + (time.monotonic() - self._anchor[0])
+        return max(0.0, self._buf_last_pts - playhead)
+
+    def _buffer_full(self) -> bool:
+        if self._buf_bytes >= READAHEAD_MAX_BYTES:
+            return True
+        return self.buffered_ahead() > readahead() + TARGET_LEAD + READAHEAD_SLACK
+
+    async def _wait_for_space(self) -> None:
+        """Back-pressure: stop reading FFmpeg (which then blocks) while the buffer is full."""
+        while self._buffer_full() and not self._stopping:
+            self._has_space.clear()
+            try:
+                await asyncio.wait_for(self._has_space.wait(), 1.0)
+            except asyncio.TimeoutError:
+                pass  # the buffer's horizon moves with the clock: re-check
+
+    async def _pace(self) -> None:
+        """Release buffered output to viewers at playback speed, TARGET_LEAD ahead of the clock."""
+        while True:
+            if not self._buf:
+                self._has_data.clear()
+                await self._has_data.wait()
+                continue
+            chunk, pts = self._buf[0]
+            if pts is not None:
+                now = time.monotonic()
+                if self._anchor is None or (self._released_pts is not None and pts < self._released_pts - 1.0):
+                    self._anchor = (now, pts)  # first output, or timestamps went backwards
+                due = self._anchor[0] + (pts - self._anchor[1])
+                if now - due > UNDERRUN_SLACK:
+                    # The buffer ran dry and viewers waited: carry on from here
+                    # at playback speed rather than bursting to "catch up".
+                    if self._released_pts is not None:
+                        self.underruns += 1
+                    self._anchor, due = (now, pts), now
+                wait = due - TARGET_LEAD - now
+                if wait > readahead() + TARGET_LEAD + READAHEAD_SLACK + 5.0:
+                    self._anchor = (now, pts)  # implausible jump forward: re-sync rather than stall
+                    continue
+                if wait > 0:
+                    await asyncio.sleep(min(wait, 0.25))
+                    continue
+                self._released_pts = pts if self._released_pts is None else max(self._released_pts, pts)
+            self._buf.popleft()
+            self._buf_bytes -= len(chunk)
+            self._has_space.set()
+            self._broadcast(chunk)
 
     def _broadcast(self, chunk: bytes) -> None:
         self._track_gop(chunk)
@@ -295,6 +447,7 @@ class ChannelStream:
 
     def start(self) -> None:
         self._on_start()
+        self._pacer = asyncio.create_task(self._pace(), name=f"pacer-{self.channel_id}")
         self.task = asyncio.create_task(self._run(), name=f"stream-{self.channel_id}")
 
     def _before_play(self, plan: SegmentPlan) -> None:
@@ -337,6 +490,10 @@ class ChannelStream:
         if self.finished:
             return
         self.finished = True
+        if self._pacer and not self._pacer.done():
+            self._pacer.cancel()
+        self._buf.clear()
+        self._buf_bytes = 0
         self._on_finish()
         for q in list(self.viewers):
             _drain_and_close(q)
@@ -370,6 +527,9 @@ class ChannelStream:
             "mode": ("copy" if self.current.copy else "transcode") if self.current else None,
             "bytes_out": self.bytes_out,
             "pid": self.proc.pid if self.proc and self.proc.returncode is None else None,
+            "readahead_s": round(self.buffered_ahead(), 1),
+            "readahead_bytes": self._buf_bytes,
+            "underruns": self.underruns,
         }
 
     async def _run(self) -> None:
@@ -423,11 +583,15 @@ class ChannelStream:
                 try:
                     if not ok:
                         await self._handle_failure(plan, err)
-                    elif plan.kind != EntryKind.SLATE and produced + SHORTFALL_TOLERANCE < plan.duration:
+                    elif plan.kind not in GENERATED_KINDS and produced + SHORTFALL_TOLERANCE < plan.duration:
                         await self._handle_failure(plan, f"source ended {plan.duration - produced:.0f}s early", mark_source=False)
                 except OperationalError as e:
                     log.error("channel %s: could not record failure, database unavailable (%s)", self.slug, e.orig)
                     self._retry_now = True
+            # Finished on its own (a catch-up reached its end): hand viewers
+            # what is still buffered before closing. stop() cancels this wait.
+            while self._buf and self.viewers and self._pacer and not self._pacer.done():
+                await asyncio.sleep(0.1)
         except asyncio.CancelledError:
             pass
         except Exception:
@@ -461,8 +625,24 @@ class ChannelStream:
             if e.kind == EntryKind.SLATE:
                 # Short slate segments so newly eligible content is picked up quickly.
                 return SegmentPlan(e.id, e.kind, e.title, pos, min(remaining, SLATE_SEGMENT), 0.0)
+            if e.kind == EntryKind.BREAK:
+                return self._break_plan(s, ch, e, pos, remaining, offset)
             plan, snapshot = self._source_plan(ch, e, pos, remaining, offset)
         return await self._resolve(plan, snapshot)
+
+    def _break_plan(self, s, ch: Channel, e: ScheduleEntry, pos: datetime, remaining: float, offset: float) -> SegmentPlan:
+        """A generated break card; the plain slate if cards can't render here."""
+        plan = SegmentPlan(e.id, EntryKind.BREAK, e.title, pos, remaining, offset)
+        if self.m.cards_ok:
+            try:
+                plan.card = cards.break_card(s, ch, e)
+                if plan.card.clip is not None and plan.card.clip.url in self.m.bad_clips:
+                    plan.card.clip = None
+            except Exception:  # noqa: BLE001 - a card is never worth dropping viewers over
+                log.exception("channel %s: could not build break card", self.slug)
+        if plan.card is None:
+            plan.label = e.title
+        return plan
 
     def _source_plan(self, ch: Channel, e: ScheduleEntry, pos: datetime, remaining: float, offset: float):
         """Pick the playback source for an entry. Must run inside a DB session."""
@@ -484,6 +664,7 @@ class ChannelStream:
         )
         plan.source_url = ps.url
         plan.live = bool(ps.live)
+        plan.cache_only = cache.must_wait(ps)
         if plan.live:
             plan.offset = 0.0
         return plan, snapshot
@@ -491,9 +672,15 @@ class ChannelStream:
     async def _resolve(self, plan: SegmentPlan, ps_snapshot: PlaybackSource | None) -> SegmentPlan | None:
         if plan.kind == "missing" or ps_snapshot is None:
             return await self._fail_plan(plan, "no eligible playback source")
+        if plan.cache_only and plan.source_url and not cache.cached(plan.source_url) and not relay.enabled():
+            return self._wait_for_download(plan)
         for attempt in range(RESOLVE_ATTEMPTS):
             try:
                 plan.target = await playable_target(ps_snapshot, use_cache=True)
+                if ps_snapshot.playback_type == PlaybackType.DIRECT_URL and not plan.live:
+                    # Parallel range requests through the in-RAM relay (falls
+                    # back to the URL itself when the origin can't do ranges).
+                    plan.target = await relay.wrap(plan.target)
                 if ps_snapshot.playback_type == PlaybackType.YOUTUBE_STREAM:
                     pair = ytstream.companion(plan.target)
                     if pair:
@@ -517,13 +704,67 @@ class ChannelStream:
         # so find the keyframe and shift the segment's clock to compensate.
         # On a stream's first segment nothing precedes them; only cheap
         # (local) sources are probed then, so remote joins stay fast.
+        return await self._resolve_join(plan)
+
+    async def _resolve_join(self, plan: SegmentPlan) -> SegmentPlan:
+        """Seek settings for a segment that starts mid-programme."""
         continuing = self.emitted_until is not None
-        if plan.copy and not plan.live and plan.offset > 0.5 and plan.target and (continuing or not plan.target.startswith("http")):
+        if plan.live or plan.offset <= 0.5 or not plan.target:
+            return plan
+        if plan.copy and (continuing or not plan.target.startswith("http")):
+            plan.keyframe_aligned = True
+        if continuing:
+            # Where a seek really lands depends on the container: exact in
+            # MP4, approximate in MPEG-TS (audio can start before the
+            # keyframe a probe predicts and overlap what already aired).
+            # So measure it: a one-second trial of the same command shows the
+            # earliest timestamp, and the real run is shifted by that much.
+            start = await self._measure_start(plan)
+            if start is not None:
+                plan.preroll = min(max(TRIAL_BASE + MUX_START - start, 0.0), MAX_PREROLL)
+                return plan
+        if plan.keyframe_aligned:
             kf = await keyframe_before(plan.target, plan.offset)
             if kf is not None:
                 plan.preroll = min(max(plan.offset - kf, 0.0), MAX_PREROLL)
-                plan.keyframe_aligned = True
+            else:
+                plan.keyframe_aligned = False
         return plan
+
+    async def _measure_start(self, plan: SegmentPlan) -> float | None:
+        """Earliest output timestamp of a short trial run of this segment's
+        FFmpeg command (at offset ``TRIAL_BASE``), or None if it can't be measured."""
+        cmd = self._cmd(plan, drawtext=False, trial=True)
+        try:
+            p = await asyncio.create_subprocess_exec(
+                *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL, stdin=asyncio.subprocess.DEVNULL,
+                start_new_session=True,
+            )
+        except OSError:
+            return None
+        self.m.register_pid(p.pid)
+        try:
+            out, _ = await asyncio.wait_for(p.communicate(), TRIAL_TIMEOUT)
+        except asyncio.TimeoutError:
+            p.kill()
+            await p.wait()
+            log.info("channel %s: join measurement timed out", self.slug)
+            return None
+        finally:
+            self.m.unregister_pid(p.pid)
+        return earliest_pts(out)
+
+    def _wait_for_download(self, plan: SegmentPlan) -> SegmentPlan:
+        """A slow source isn't fully downloaded yet: air a short card instead
+        of a stuttering stream, then check again. Once the file is ready the
+        programme joins at the scheduled position."""
+        url = plan.source_url or ""
+        cache.start_prefetch(url)
+        if self._waiting_for != plan.entry_id:
+            self._waiting_for = plan.entry_id
+            log.info("channel %s: '%s' is a slow source still downloading; showing a card until it is ready", self.slug, plan.title)
+        return SegmentPlan(plan.entry_id, EntryKind.SLATE, plan.title, plan.sched_start, min(plan.duration, SLATE_SEGMENT), 0.0,
+                           label=f"{plan.title} - downloading, back shortly")
 
     async def _fail_plan(self, plan: SegmentPlan, msg: str) -> SegmentPlan | None:
         await self._handle_failure(plan, msg, mark_source=plan.source_id is not None)
@@ -534,6 +775,20 @@ class ChannelStream:
         rest of the failed programme with freshly generated entries."""
         log.warning("channel %s: %s (%s)", self.slug, msg, plan.title)
         self.failures += 1
+        if plan.kind in GENERATED_KINDS:
+            # A generated card failed: no source to blame and nothing to
+            # reschedule. Fall back to the plain slate for later breaks.
+            if plan.card is not None and plan.card.clip is not None:
+                # Most likely the preview fetch: redraw this bumper without it.
+                self.m.bad_clips.add(plan.card.clip.url)
+                log.warning("channel %s: bumper preview failed, using the thumbnail: %s", self.slug, msg)
+            elif plan.card is not None:
+                self.m.cards_ok = False
+                log.error("channel %s: break cards disabled after a render failure: %s", self.slug, msg)
+            with session_scope() as s:
+                s.add(PlaybackEvent(channel_id=self.channel_id, message=f"card '{plan.title}': {msg}"[:2000]))
+            self._retry_now = True
+            return
         forget_target(plan.source_id)
         if plan.source_url and ytstream.cache_key(plan.source_url):
             ytstream.forget(plan.source_url)  # stream addresses may have expired: re-resolve next time
@@ -564,15 +819,38 @@ class ChannelStream:
                 record_version(s, ch, "failover", changed, added, removed, note=f"'{title}': {msg}"[:500])
         self._retry_now = True
 
-    def _cmd(self, plan: SegmentPlan, drawtext: bool) -> list[str]:
+    def _cmd(self, plan: SegmentPlan, drawtext: bool, catchup: bool = False, trial: bool = False,
+             gradients: bool = True) -> list[str]:
+        """FFmpeg command for a segment. ``trial`` builds the same seek and
+        mapping unpaced, for one second, at a fixed timestamp offset: used to
+        measure where a mid-programme join really starts."""
         st = settings
         cmd = [st.ffmpeg_path, "-hide_banner", "-nostdin", "-loglevel", "error", "-nostats", "-progress", "pipe:2"]
         now = self._now()
+        # How far output already runs ahead of the clock, and how far this
+        # segment may run: generated cards need no read-ahead, media does.
         lead = ((self.emitted_until or now) - now).total_seconds()
-        burst = max(0.0, min(TARGET_LEAD, TARGET_LEAD - lead))
+        generated = plan.kind in GENERATED_KINDS or plan.target is None
+        # A bumper that previews the next programme reads it from the origin:
+        # give it the read-ahead a programme gets, so a slow seek can't stall it.
+        remote = not generated or (plan.card is not None and plan.card.clip is not None)
+        target = TARGET_LEAD + (readahead() if remote else 0)
+        burst = max(0.0, min(target, target - lead))
         rate = ["-readrate", "1"] + (["-readrate_initial_burst", f"{burst:.2f}"] if burst > 0.05 else [])
+        if catchup and not generated and readahead() > 0:
+            rate += ["-readrate_catchup", str(READRATE_CATCHUP)]
+        if trial:
+            rate = []
         out_v: list[str]
-        if plan.kind == EntryKind.SLATE or plan.target is None:
+        if generated and plan.card is not None:
+            if plan.render is not None:
+                plan.render.cleanup()
+            plan.render = cards.render(plan.card, plan.duration, plan.offset, drawtext=drawtext, gradients=gradients, rate=rate)
+            cmd += plan.render.inputs
+            cmd += ["-filter_complex", plan.render.filter_complex, "-map", "[v]", "-map", "[a]", "-t", f"{plan.duration:.3f}"]
+            cmd += ["-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-g", "50", "-b:v", "900k"]
+            cmd += ["-c:a", "aac", "-b:a", "128k", "-ar", "48000", "-ac", "2"]
+        elif generated:
             label = _sanitize_text(
                 plan.label or (f"{self.channel_name} - back soon" if plan.kind == EntryKind.SLATE else self.channel_name)
             )
@@ -609,7 +887,8 @@ class ChannelStream:
             # With -noaccurate_seek the output starts at the keyframe, so the
             # pre-roll counts towards -t; add it so audio runs to the same end.
             audio_map = "1:a:0" if plan.audio_target or not plan.has_audio else "0:a:0"
-            cmd += ["-t", f"{plan.duration + plan.preroll:.3f}", "-map", "0:v:0", "-map", audio_map, "-sn", "-dn"]
+            run_for = TRIAL_SECONDS if trial else plan.duration + plan.preroll
+            cmd += ["-t", f"{run_for:.3f}", "-map", "0:v:0", "-map", audio_map, "-sn", "-dn"]
             audio_norm = ["-c:a", "aac", "-b:a", "160k", "-ar", "48000", "-ac", "2"]
             if plan.copy:
                 # Remux video; normalise audio (cheap) so sample rate/layout
@@ -633,7 +912,7 @@ class ChannelStream:
             # A remux that starts on an earlier keyframe emits ``preroll``
             # seconds before the seek point; start the clock that much later
             # so those packets continue on from the previous segment.
-            "-output_ts_offset", f"{self.ts_offset + plan.preroll:.3f}",
+            "-output_ts_offset", f"{TRIAL_BASE:.3f}" if trial else f"{self.ts_offset + plan.preroll:.3f}",
             "-mpegts_flags", "+initial_discontinuity+resend_headers",
             "-mpegts_service_id", "1", "-mpegts_pmt_start_pid", "4096", "-mpegts_start_pid", "256",
             "-metadata", f"service_name={self.channel_name}", "-metadata", "service_provider=ArchiveTV",
@@ -644,7 +923,10 @@ class ChannelStream:
         return cmd
 
     async def _play(self, plan: SegmentPlan) -> tuple[float, bool, str | None]:
-        cmd = self._cmd(plan, await self.m.drawtext_available())
+        if plan.card is not None and not plan.card.thumbs:
+            await cards.prepare(plan.card)  # thumbnails, best effort and bounded
+        cmd = self._cmd(plan, await self.m.drawtext_available(), await self.m.readrate_catchup_available(),
+                        gradients=await self.m.gradients_available())
         log.info("channel %s: %s '%s' offset=%.1fs dur=%.1fs %s", self.slug, plan.kind, plan.title, plan.offset, plan.duration,
                  "copy" if plan.copy else "encode")
         self.proc = proc = await asyncio.create_subprocess_exec(
@@ -684,8 +966,9 @@ class ChannelStream:
                 pending += data
                 cut = len(pending) - (len(pending) % TS_PACKET)
                 if cut:
-                    self._broadcast(pending[:cut])
+                    self._enqueue(pending[:cut])
                     pending = pending[cut:]
+                    await self._wait_for_space()
             rc = await proc.wait()
             await err_task
         finally:
@@ -693,6 +976,9 @@ class ChannelStream:
                 await self._kill_proc()
             self.m.unregister_pid(proc.pid)
             self.proc = None
+            if plan.render is not None:
+                plan.render.cleanup()
+                plan.render = None
         produced = min(out_time, plan.duration) if out_time > 0 else 0.0
         if self._stopping:
             return produced, True, None
@@ -701,6 +987,29 @@ class ChannelStream:
         if produced == 0.0 and plan.duration > 1:
             return 0.0, False, "; ".join(errors[-3:]) or "no output produced"
         return produced, True, None
+
+
+def raw_pes_pts(chunk: bytes, off: int, b3: int) -> float | None:
+    """PTS in seconds (33-bit, not unwrapped) of the PES starting in the TS packet at ``off``."""
+    start = off + 4 + ((1 + chunk[off + 4]) if b3 & 0x20 else 0)
+    h = chunk[start : start + 14]
+    if len(h) < 14 or h[0:3] != b"\x00\x00\x01" or not (h[7] & 0x80):
+        return None
+    return (((h[9] >> 1) & 7) << 30 | h[10] << 22 | (h[11] >> 1) << 15 | h[12] << 7 | h[13] >> 1) / 90000
+
+
+def earliest_pts(data: bytes) -> float | None:
+    """Lowest audio or video PTS in a run of our own MPEG-TS output."""
+    low = None
+    for off in range(0, len(data) - TS_PACKET + 1, TS_PACKET):
+        if data[off] != 0x47:
+            continue
+        b1 = data[off + 1]
+        if b1 & 0x40 and (((b1 & 0x1F) << 8) | data[off + 2]) in (VIDEO_PID, AUDIO_PID):
+            secs = raw_pes_pts(data, off, data[off + 3])
+            if secs is not None and (low is None or secs < low):
+                low = secs
+    return low
 
 
 async def keyframe_before(target: str, offset: float) -> float | None:

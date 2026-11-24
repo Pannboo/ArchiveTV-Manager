@@ -65,6 +65,7 @@ export interface Meta {
   feed_token: boolean;
   feed_query: string;
   minimal_disk: boolean;
+  looks: { key: string; label: string }[];
 }
 
 export interface MediaSummary {
@@ -105,6 +106,10 @@ export interface Source {
   height: number | null;
   duration: number | null;
   size_bytes?: number | null;
+  bitrate_kbps?: number | null;
+  throughput_kbps?: number | null;
+  speed_ratio?: number | null;
+  slow?: boolean;
   last_validated_at: string | null;
   last_error: string | null;
   priority?: number;
@@ -160,6 +165,10 @@ export interface Channel {
   catchup_days: number;
   items: number;
   now_playing: string | null;
+  breaks_enabled: boolean;
+  break_seconds: number;
+  card_theme: string;
+  break_style: "auto" | "lineup" | "bumper";
 }
 
 export interface ChannelDetail extends Omit<Channel, "items"> {
@@ -167,6 +176,9 @@ export interface ChannelDetail extends Omit<Channel, "items"> {
   filler_pad: boolean;
   logo_file: string | null;
   logo: string | null;
+  logo_generated: boolean;
+  look: string;
+  break_style_resolved: "lineup" | "bumper";
   rule_ids: number[];
   items: { id: number; media_item_id: number; title: string | null; role: string; position: number; duration: number | null;
     review_status: string | null; schedulable: boolean }[];
@@ -195,4 +207,84 @@ export interface Paged<T> {
   page: number;
   pages: number;
   items: T[];
+}
+
+// ---------------------------------------------------------------- channel packs
+
+export interface PackSummary {
+  id: string;
+  name: string;
+  description: string | null;
+  number: number | null;
+  policy: "auto_air" | "inbox";
+  target_hours: number;
+  providers: string[];
+  blocks: string[];
+  theme: string | null;
+  installed: boolean;
+  installed_version: number | null;
+  version: number;
+}
+
+export interface InstalledPack {
+  id: number;
+  key: string;
+  name: string;
+  version: number;
+  policy: "auto_air" | "inbox";
+  target_hours: number;
+  playable_hours: number;
+  enabled: boolean;
+  theme_check: boolean;
+  theme: string | null;
+  theme_check_available: boolean;
+  description: string | null;
+  channel: { id: number; slug: string; name: string; number: number | null; enabled: boolean } | null;
+  rules: { id: number; name: string; provider: string; page: number | null; last_run_at: string | null; last_status: string | null;
+    last_new_count: number }[];
+  waiting_review: number;
+  aired_count: number;
+  inbox_count: number;
+  installed_at: string;
+  last_fill_at: string | null;
+  last_fill_status: string | null;
+  last_error: string | null;
+  refresh_days: number;
+  rotate_percent: number;
+  last_refresh_at: string | null;
+  next_refresh_at: string;
+  last_refresh: { checked?: number; gone?: number; back_to_review?: number; waiting_aired?: number; new?: number;
+    rotated_out?: number; rotated_back?: number; errors?: string[] };
+  resting: number;
+  youtube_channels: Partial<Record<"suggested" | "followed" | "dismissed", number>>;
+}
+
+export interface FollowedChannel {
+  id: number;
+  channel_id: string;
+  title: string | null;
+  status: "suggested" | "followed" | "dismissed";
+  hits: number;
+  samples: string[];
+  ai_verdict: { fits?: boolean | null; reason?: string };
+  added_by: string;
+  url: string;
+  harvested: number;
+  followed_at: string | null;
+}
+
+export interface ChannelsSummary {
+  channels: FollowedChannel[];
+  searches_left_today: number;
+  search_budget: number;
+}
+
+export interface PacksResponse {
+  installed: InstalledPack[];
+  starters: PackSummary[];
+  theme_check_available: boolean;
+  theme_check_model: string;
+  lab_mode: boolean;
+  youtube_available: boolean;
+  ai: { backend: string; model: string | null };
 }

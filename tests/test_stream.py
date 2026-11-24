@@ -91,3 +91,64 @@ def test_continuous_stream_across_transitions(session, tmp_path):
         gaps = [(x, y) for x, y in zip(dts, dts[1:]) if y - x > 0.5]
         assert not backwards, backwards[:5]
         assert not gaps, gaps[:5]
+
+
+@pytest.mark.parametrize("style", ["bumper", "lineup"])
+def test_continuous_stream_through_break_cards(session, tmp_path, monkeypatch, style):
+    """Breaks (an animated bumper previewing the next local file, or the lineup
+    card) sit between programmes without breaking timestamps."""
+    from archivetv import cards
+
+    monkeypatch.setattr(cards, "THUMB_HOSTS", ())  # no network
+    settings.media_dir.mkdir(parents=True, exist_ok=True)
+    _clip(settings.media_dir / "c.mp4", 4)
+    _clip(settings.media_dir / "d.mp4", 4)
+    s = session
+    ch = Channel(slug=f"brk-{style}", tvg_id=f"brk-{style}", name="Cartoons", mode=ScheduleMode.SEQUENTIAL,
+                 breaks_enabled=True, break_seconds=4, card_theme="toon", break_style=style)
+    s.add(ch)
+    s.flush()
+    for rel in ("c.mp4", "d.mp4"):
+        it = _local_item(s, rel, Eligibility.IPTV_READY, 4.0)
+        it.playback_sources[0].seekable = True
+        assign_to_channel(s, it, ch.id, ChannelRole.PROGRAMME)
+    s.commit()
+    s.refresh(ch)
+    extend(s, ch, days=0.05)
+    s.commit()
+
+    async def capture() -> tuple[bytes, list[str]]:
+        m = StreamManager()
+        st, q = await m.subscribe(ch.id)
+        kinds: list[str] = []
+        buf = bytearray()
+        loop = asyncio.get_running_loop()
+        end = loop.time() + 18
+        while loop.time() < end:
+            if st.current is not None and (not kinds or kinds[-1] != st.current.kind):
+                kinds.append(st.current.kind)
+            try:
+                chunk = await asyncio.wait_for(q.get(), timeout=min(0.5, end - loop.time()))
+            except asyncio.TimeoutError:
+                continue
+            if chunk is None:
+                break
+            buf += chunk
+        assert m.cards_ok, "a break card failed to render"
+        assert not m.bad_clips, f"bumper preview failed: {m.bad_clips}"
+        st.remove_viewer(q)
+        await m.stop_all()
+        return bytes(buf), kinds
+
+    data, kinds = asyncio.run(capture())
+    assert "break" in kinds and "programme" in kinds, kinds
+    out = tmp_path / "out.ts"
+    out.write_bytes(data)
+    info = json.loads(subprocess.run(["ffprobe", "-v", "error", "-print_format", "json", "-show_streams", str(out)],
+                                     capture_output=True, text=True).stdout)
+    assert [st["codec_name"] for st in info["streams"]] == ["h264", "aac"]
+    for sel in ("v:0", "a:0"):
+        dts = _dts(out, sel)
+        assert dts[-1] - dts[0] > 9
+        assert not [(x, y) for x, y in zip(dts, dts[1:]) if y < x]
+        assert not [(x, y) for x, y in zip(dts, dts[1:]) if y - x > 0.5]

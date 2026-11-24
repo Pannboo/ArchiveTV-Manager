@@ -62,3 +62,6 @@ button:disabled { opacity: .55; cursor: default; }
 dl.kv { display: grid; grid-template-columns: max-content 1fr; gap: 4px 12px; margin: 0; font-size: 13px; }
 dl.kv dt { color: var(--muted); }
 @media (max-width: 900px) { .two { grid-template-columns: 1fr; } }
+.meter { height: 8px; border-radius: 4px; background: var(--chip); overflow: hidden; margin: 4px 0 6px; }
+.meter > span { display: block; height: 100%; background: var(--ok); border-radius: 4px; }
+details summary { cursor: pointer; color: var(--muted); }

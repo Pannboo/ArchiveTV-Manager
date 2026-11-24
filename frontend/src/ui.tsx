@@ -145,6 +145,18 @@ export const IptvChip = ({ st }: { st: string }) => (
   <Chip cls={st === "eligible" ? "ok" : "warn"} title="IPTV schedule eligibility">IPTV: {st}</Chip>
 );
 
+export const fmtKbps = (k: number) => (k >= 1000 ? `${(k / 1000).toFixed(1)} Mbps` : `${k} kbps`);
+
+/** Measured download speed against the media bitrate; flags sources the origin can't keep up with. */
+export function SpeedNote({ ps }: { ps: Pick<Source, "bitrate_kbps" | "throughput_kbps" | "speed_ratio" | "slow"> }) {
+  if (!ps.throughput_kbps || !ps.bitrate_kbps) return null;
+  const text = `downloads ${fmtKbps(ps.throughput_kbps)} · plays at ${fmtKbps(ps.bitrate_kbps)}`;
+  return ps.slow ? (
+    <div><Chip cls="warn" title="Measured when the source was last validated. The origin delivered it too slowly for reliable live playback; it streams over parallel connections, which usually covers this. If viewers still see buffering, attach a faster copy or turn on disk pre-download.">slow source</Chip>{" "}
+      <span className="muted">{text} ({ps.speed_ratio}×)</span></div>
+  ) : <div className="muted">{text} ({ps.speed_ratio}×)</div>;
+}
+
 // ---------------------------------------------------------------- preview
 
 /** Official embedded players for YouTube/Archive, HTML5 video otherwise. */

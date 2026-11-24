@@ -16,10 +16,11 @@ from typing import Literal
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
+from fastapi.responses import Response
 from pydantic import BaseModel, Field
 from sqlalchemy import func, or_, select
 
-from . import appsettings, catchup, jobs, logos, monitor, ytstream
+from . import appsettings, cards, catchup, jobs, logos, monitor, themes, ytstream
 from .api import _channel, _detail, _iso, _item, channel_out, entry_out, media_out, require_api, rule_out
 from .catalogue import (
     IPTV_TYPES,
@@ -28,6 +29,7 @@ from .catalogue import (
     best_iptv_source,
     file_sha1,
     flag_duplicate,
+    speed_fields,
     is_schedulable,
     set_review_status,
     set_rights,
@@ -125,6 +127,7 @@ def meta():
         "providers": provider_labels(), "retention_choices": list(RETENTION_CHOICES),
         "timezone": str(settings.timezone), "schedule_days": settings.schedule_days,
         "feed_token": bool(settings.feed_token), "minimal_disk": settings.minimal_disk,
+        "looks": themes.choices(),
         # Appended to feed/stream links the admin opens (same as the classic Settings page shows).
         "feed_query": f"token={quote(settings.feed_token)}" if settings.feed_token else "",
     }
@@ -430,7 +433,7 @@ def source_out(ps: PlaybackSource) -> dict:
         "health_ok": ps.health_ok, "seekable": ps.seekable, "live": ps.live, "video_codec": ps.video_codec, "audio_codec": ps.audio_codec,
         "width": ps.width, "height": ps.height, "duration": ps.duration, "priority": ps.priority,
         "allow_cache": ps.allow_cache, "failure_count": ps.failure_count, "last_error": ps.last_error,
-        "last_validated_at": _iso(ps.last_validated_at), "checksum": ps.checksum,
+        "last_validated_at": _iso(ps.last_validated_at), "checksum": ps.checksum, **speed_fields(ps),
     }
 
 
@@ -583,7 +586,8 @@ def channel_detail(channel_id: int, request: Request):
         d = channel_out(ch, s)
         d.update({
             "idents_between": ch.idents_between, "filler_pad": ch.filler_pad, "logo_file": ch.logo_file,
-            "logo": logos.url(ch, base), "rule_ids": [r.id for r in ch.rules],
+            "logo": logos.url(ch, base), "logo_generated": bool(ch.logo_generated), "rule_ids": [r.id for r in ch.rules],
+            "look": themes.for_channel(s, ch).key, "break_style_resolved": themes.break_style(s, ch),
             "items": [{"id": ci.id, "media_item_id": ci.media_item_id, "title": ci.media_item.title if ci.media_item else None,
                        "role": ci.role, "position": ci.position, "duration": ci.media_item.duration if ci.media_item else None,
                        "review_status": ci.media_item.review_status if ci.media_item else None,
@@ -686,9 +690,48 @@ async def upload_logo(channel_id: int, request: Request, file: UploadFile = File
         ch = _channel(s, channel_id)
         try:
             ch.logo_file = logos.save(ch.slug, data, ch.logo_file)
+            ch.logo_generated = False  # an uploaded logo always wins
         except logos.LogoError as e:
             raise HTTPException(400, str(e))
     return channel_detail(channel_id, request)
+
+
+@router.post("/channels/{channel_id}/logo/generate")
+def generate_logo(channel_id: int, request: Request):
+    """Draw a logo in the channel's look, replacing any uploaded one."""
+    with session_scope() as s:
+        ch = _channel(s, channel_id)
+        try:
+            logos.generate(s, ch, force=True)
+        except RuntimeError as e:
+            raise HTTPException(500, f"could not draw the logo: {e}")
+    return channel_detail(channel_id, request)
+
+
+@router.get("/channels/{channel_id}/card-preview.png")
+async def card_preview(channel_id: int):
+    """A still of the channel's "UP NEXT" card with its real lineup."""
+    import asyncio
+    import subprocess
+
+    from .models import ScheduleEntry
+
+    with session_scope() as s:
+        ch = _channel(s, channel_id)
+        probe = ScheduleEntry(id=0, channel_id=ch.id, start=utcnow(), end=utcnow(), kind="break", title="preview")
+        card = cards.break_card(s, ch, probe)
+    await cards.prepare(card)
+    card.clip = None  # a still: the thumbnail stands in for the moving preview
+    r = cards.render(card, 4.0, 3.2)  # late enough that everything has animated in
+    try:
+        cmd = [settings.ffmpeg_path, "-hide_banner", "-loglevel", "error", *r.inputs, "-filter_complex", r.filter_complex,
+               "-map", "[v]", "-frames:v", "1", "-c:v", "png", "-f", "image2pipe", "pipe:1", "-map", "[a]", "-f", "null", "-"]
+        p = await asyncio.to_thread(subprocess.run, cmd, capture_output=True, timeout=60)
+    finally:
+        r.cleanup()
+    if p.returncode != 0 or not p.stdout.startswith(b"\x89PNG"):
+        raise HTTPException(500, "could not render the card: " + p.stderr.decode(errors="replace")[-300:])
+    return Response(p.stdout, media_type="image/png", headers={"Cache-Control": "no-store"})
 
 
 @router.delete("/channels/{channel_id}/logo")
@@ -697,6 +740,12 @@ def delete_logo(channel_id: int, request: Request):
         ch = _channel(s, channel_id)
         logos.remove(ch.logo_file)
         ch.logo_file = None
+        ch.logo_generated = False
+        if logos.needs_generated(ch):
+            try:
+                logos.generate(s, ch)  # every channel has a logo: back to a drawn one
+            except RuntimeError:
+                pass
     return channel_detail(channel_id, request)
 
 
@@ -813,13 +862,15 @@ def get_settings(request: Request):
         "feeds": {"m3u": f"{base}/playlist.m3u", "xmltv": f"{base}/epg.xml", "token_set": bool(settings.feed_token)},
         "youtube_configured": bool(settings.youtube_api_key), "provider_status": statuses,
         "media_dir": str(settings.media_dir), "allowed_hosts": ["archive.org"] + settings.extra_media_hosts,
-        "minimal_disk": settings.minimal_disk, "backups": [b.name for b in backups],
+        "minimal_disk": settings.minimal_disk, "cache_slow_sources": settings.cache_slow_sources,
+        "cache_enabled": settings.cache_enabled, "backups": [b.name for b in backups],
     }
 
 
 @router.patch("/settings")
-def patch_settings(values: dict[str, str | int | bool | None]):
+async def patch_settings(values: dict[str, str | int | bool | None]):
     """Update admin-tunable (non-secret) settings."""
+    lab_before = settings.packs_air_everything
     unknown = set(values) - set(appsettings.TUNABLES)
     if unknown:
         raise HTTPException(400, f"unknown settings: {', '.join(sorted(unknown))}")
@@ -839,7 +890,18 @@ def patch_settings(values: dict[str, str | int | bool | None]):
     errors = appsettings.save(merged)
     if errors:
         raise HTTPException(400, "; ".join(errors))
+    if settings.packs_air_everything and not lab_before:
+        # Lab mode on: air what auto-air packs have been holding back, now.
+        import asyncio
+
+        from . import packs
+
+        _background.add(t := asyncio.create_task(packs.reapply_all(), name="packs-lab-mode"))
+        t.add_done_callback(_background.discard)
     return {"ok": True}
+
+
+_background: set = set()
 
 
 @router.post("/system/backup")

@@ -18,8 +18,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import func, or_, select
 
-from . import catchup, jobs, monitor
-from .catalogue import assign_to_channel, item_eligibility, iptv_status, is_schedulable, set_review_status
+from . import catchup, jobs, logos, monitor, themes
+from .catalogue import assign_to_channel, item_eligibility, iptv_status, is_schedulable, set_review_status, speed_fields
 from .config import settings
 from .db import session_scope, utcnow
 from .discovery import run_rule, validate_items
@@ -90,6 +90,8 @@ class ChannelIn(BaseModel):
     filler_pad: bool = True
     catchup_enabled: bool = True
     catchup_days: Literal[1, 3, 7, 14, 30] = 7
+    breaks_enabled: bool = False
+    break_seconds: int = Field(12, ge=4, le=120)
 
 
 class ChannelPatch(BaseModel):
@@ -109,6 +111,10 @@ class ChannelPatch(BaseModel):
     filler_pad: bool | None = None
     catchup_enabled: bool | None = None
     catchup_days: Literal[1, 3, 7, 14, 30] | None = None
+    breaks_enabled: bool | None = None
+    break_seconds: int | None = Field(None, ge=4, le=120)
+    card_theme: str | None = Field(None, description="A look from /meta 'looks', or 'auto'")
+    break_style: Literal["auto", "lineup", "bumper"] | None = None
     rule_ids: list[int] | None = None
 
 
@@ -149,7 +155,7 @@ def media_out(it: MediaItem, detail: bool = False, channel_items: list[ChannelIt
                 "license_url": ps.license_url, "health_ok": ps.health_ok,
                 "seekable": ps.seekable, "live": ps.live, "video_codec": ps.video_codec, "audio_codec": ps.audio_codec,
                 "width": ps.width, "height": ps.height, "duration": ps.duration, "size_bytes": ps.size_bytes,
-                "last_validated_at": _iso(ps.last_validated_at), "last_error": ps.last_error,
+                "last_validated_at": _iso(ps.last_validated_at), "last_error": ps.last_error, **speed_fields(ps),
             } for ps in it.playback_sources],
         })
     return d
@@ -165,6 +171,8 @@ def channel_out(ch: Channel, s) -> dict:
         "mode": ch.mode, "seed": ch.seed, "repeat_avoid_count": ch.repeat_avoid_count, "playback_format": ch.playback_format,
         "fallback_item_id": ch.fallback_item_id, "catchup_enabled": ch.catchup_enabled, "catchup_days": history_days(ch),
         "items": len(ch.items), "now_playing": cur.title if cur else None,
+        "breaks_enabled": bool(ch.breaks_enabled), "break_seconds": ch.break_seconds,
+        "card_theme": ch.card_theme or "auto", "break_style": ch.break_style or "auto",
     }
 
 
@@ -310,6 +318,11 @@ def create_channel(body: ChannelIn):
                      **body.model_dump(exclude={"slug", "tvg_id"}))
         s.add(ch)
         s.flush()
+        if logos.needs_generated(ch):
+            try:
+                logos.generate(s, ch)
+            except RuntimeError:
+                pass
         return channel_out(ch, s)
 
 
@@ -330,9 +343,22 @@ def patch_channel(channel_id: int, body: ChannelPatch):
         rule_ids = changes.pop("rule_ids", None)
         if rule_ids is not None:
             ch.rules = list(s.scalars(select(DiscoveryRule).where(DiscoveryRule.id.in_(rule_ids))).all()) if rule_ids else []
+        if "card_theme" in changes and changes["card_theme"] not in {c["key"] for c in themes.choices()}:
+            raise HTTPException(400, "unknown look")
+        breaks_changed = any(k in changes and changes[k] != getattr(ch, k) for k in ("breaks_enabled", "break_seconds"))
+        redraw = any(k in changes and changes[k] != getattr(ch, k) for k in ("name", "number", "card_theme"))
         for k, v in changes.items():
             setattr(ch, k, v)
         s.flush()
+        if breaks_changed and ch.enabled:
+            # Breaks sit between programmes: rebuild what's upcoming (the
+            # programme on air now is kept).
+            regenerate(s, ch, actor="admin")
+        if (redraw or "logo_url" in changes) and logos.needs_generated(ch):
+            try:
+                logos.generate(s, ch)  # keep a drawn logo in step with the name, number and look
+            except RuntimeError:
+                pass
         return channel_out(ch, s)
 
 

@@ -1,0 +1,29 @@
+{
+  "format": 1,
+  "id": "live-music",
+  "name": "Live Music",
+  "number": 51,
+  "description": "Full sets and live sessions released on YouTube under Creative Commons. Needs a YouTube API key; with experimental YouTube streaming on, they can air through the relay. Uploaders sometimes mislabel licences, so finds wait for review.",
+  "look": "concert",
+  "logo_text": "LIVE",
+  "order": "shuffle",
+  "policy": "inbox",
+  "target_hours": 40,
+  "theme": "Live music performances: concerts, full sets and live sessions",
+  "rules": [
+    {
+      "name": "YouTube: CC live sessions",
+      "provider": "youtube",
+      "query": "live session full set",
+      "params": {
+        "creative_commons_only": true,
+        "embeddable_only": true,
+        "min_duration": 900,
+        "order": "viewCount"
+      },
+      "max_results": 50
+    }
+  ],
+  "author": "ArchiveTV starter packs",
+  "version": 1
+}

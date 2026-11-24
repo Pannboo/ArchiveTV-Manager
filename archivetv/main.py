@@ -3,6 +3,7 @@
 Public (Dispatcharr-facing) endpoints:
     GET /playlist.m3u      GET /epg.xml      GET /live/{channel_id}.ts      GET /health
     GET /catchup/{channel_id}.ts?start=...   GET /startover/{channel_id}.ts
+    GET /hls/{channel_id}/index.m3u8          GET /api/public/...  (see public.py)
     Xtream Codes-compatible upstream interface: see xtream.py
 Everything under /admin requires an administrator session.
 """
@@ -33,7 +34,7 @@ from .feeds import build_m3u, build_xmltv
 from .models import Channel, ScheduleEntry
 from .providers import close_all
 from .scheduler import maintain
-from . import catchup, logos
+from . import catchup, logos, relay
 from .stream import StreamLimitError, manager
 
 
@@ -102,7 +103,11 @@ async def lifespan(app: FastAPI):
         yield
     finally:
         jobs.stop_jobs()
+        from .hls import hls_manager
+
+        await hls_manager.stop_all()
         await manager.stop_all()
+        await relay.close_all()
         await close_all()
 
 
@@ -121,10 +126,11 @@ def base_url(request: Request) -> str:
 
 
 @app.get("/playlist.m3u")
-def playlist(request: Request):
+def playlist(request: Request, format: str = "ts"):
+    """M3U playlist; ``?format=hls`` lists the HLS streams instead of MPEG-TS."""
     _check_token(request)
     with session_scope() as s:
-        body = build_m3u(s, base_url(request))
+        body = build_m3u(s, base_url(request), hls=format.lower() == "hls")
     return Response(body, media_type="audio/x-mpegurl", headers={"Cache-Control": "no-cache"})
 
 
@@ -297,12 +303,17 @@ from fastapi.openapi.docs import get_swagger_ui_html  # noqa: E402
 from . import api as _api  # noqa: E402
 from . import api_admin as _api_admin  # noqa: E402
 from . import xtream as _xtream  # noqa: E402
+from . import public as _public  # noqa: E402
+from . import api_packs as _api_packs  # noqa: E402
 from .web import admin as _admin  # noqa: E402
 
 app.include_router(_api.router)
 app.include_router(_api_admin.auth_router)
 app.include_router(_api_admin.router)
 app.include_router(_xtream.router, tags=["xtream codes"])
+app.include_router(_public.router)
+app.include_router(_api_packs.router)
+app.include_router(_api_packs.ai_router)
 app.include_router(_admin.router, include_in_schema=False)
 
 

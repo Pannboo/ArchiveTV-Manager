@@ -1,0 +1,53 @@
+{
+  "format": 1,
+  "id": "cartoons",
+  "name": "Cartoons",
+  "number": 21,
+  "description": "Golden-age animated shorts: theatrical cartoons that have passed into the public domain.",
+  "look": "toon",
+  "logo_text": "TOONS",
+  "order": "shuffle",
+  "policy": "auto_air",
+  "target_hours": 60,
+  "breaks": true,
+  "break_seconds": 8,
+  "theme": "Animated cartoon shorts, mostly 1920s-1960s theatrical animation",
+  "rules": [
+    {
+      "name": "Classic cartoons",
+      "params": {
+        "collection": "classic_cartoons",
+        "min_duration": 180,
+        "max_duration": 2400,
+        "excluded_keywords": "trailer, teaser, sample, clip, preview"
+      }
+    },
+    {
+      "name": "Animation & cartoons",
+      "query": "cartoon",
+      "params": {
+        "collection": "animationandcartoons",
+        "year_to": 1969,
+        "min_duration": 180,
+        "max_duration": 2400,
+        "excluded_keywords": "trailer, teaser, sample, clip, preview",
+        "preferred_formats": "h.264, mpeg4"
+      }
+    },
+    {
+      "name": "YouTube: vintage cartoons",
+      "provider": "youtube",
+      "query": "vintage cartoon full episode 1940s",
+      "params": {
+        "min_duration": 180,
+        "max_duration": 2400,
+        "embeddable_only": true,
+        "order": "viewCount",
+        "excluded_keywords": "trailer, reaction, review, explained, top 10"
+      },
+      "max_results": 25
+    }
+  ],
+  "author": "ArchiveTV starter packs",
+  "version": 2
+}

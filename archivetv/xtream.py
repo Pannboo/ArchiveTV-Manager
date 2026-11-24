@@ -77,7 +77,7 @@ def _user_info() -> dict:
         "username": settings.xc_username, "password": settings.xc_password, "message": "ArchiveTV Manager",
         "auth": 1, "status": "Active", "exp_date": None, "is_trial": "0", "active_cons": str(len(manager.catchup_status())),
         "created_at": "0", "max_connections": str(settings.max_streams + settings.max_catchup_sessions),
-        "allowed_output_formats": ["ts"],
+        "allowed_output_formats": ["ts", "m3u8"],
     }
 
 
@@ -151,6 +151,11 @@ def _channel_slug(stream_id: str) -> str:
 @router.get("/live/{username}/{password}/{stream_id}")
 async def xc_live(username: str, password: str, stream_id: str, request: Request):
     _require(username, password)
+    if stream_id.endswith(".m3u8"):
+        # Clients set to HLS output ask for <id>.m3u8: serve the HLS playlist.
+        from .public import hls_playlist
+
+        return await hls_playlist(_channel_slug(stream_id))
     from .main import live_by_slug
 
     return await live_by_slug(_channel_slug(stream_id))

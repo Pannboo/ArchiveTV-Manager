@@ -20,7 +20,7 @@ IPTV_TYPES = {PlaybackType.DIRECT_URL, PlaybackType.LOCAL_FILE, PlaybackType.YOU
 
 
 def youtube_stream_allowed(ps: PlaybackSource) -> bool:
-    """The experimental YouTube stream type only counts while it is switched on."""
+    """The YouTube stream type only counts while YouTube streaming is switched on."""
     return ps.playback_type != PlaybackType.YOUTUBE_STREAM or bool(settings.youtube_streaming)
 
 _NON_ALNUM = re.compile(r"[^a-z0-9]+")
@@ -49,8 +49,29 @@ def source_is_iptv_ok(ps: PlaybackSource) -> bool:
     )
 
 
+def source_speed_ratio(ps: PlaybackSource) -> float | None:
+    """Measured download speed over media bitrate (2.0 = downloads twice as fast as it plays)."""
+    if ps.live or not ps.throughput_kbps or not ps.bitrate_kbps:
+        return None
+    return ps.throughput_kbps / ps.bitrate_kbps
+
+
+def source_is_slow(ps: PlaybackSource) -> bool:
+    """The origin's measured speed leaves too little margin over the bitrate to stream reliably."""
+    ratio = source_speed_ratio(ps)
+    return ratio is not None and ratio < settings.min_speed_ratio
+
+
+def speed_fields(ps: PlaybackSource) -> dict:
+    ratio = source_speed_ratio(ps)
+    return {"bitrate_kbps": ps.bitrate_kbps, "throughput_kbps": ps.throughput_kbps,
+            "speed_ratio": round(ratio, 2) if ratio is not None else None, "slow": source_is_slow(ps)}
+
+
 def best_iptv_source(item: MediaItem) -> PlaybackSource | None:
-    for ps in sorted(item.playback_sources, key=lambda p: (p.priority, p.id or 0)):
+    # Priority decides, except that a source flagged slow only wins when no
+    # other usable source exists (a slow source still beats none).
+    for ps in sorted(item.playback_sources, key=lambda p: (source_is_slow(p), p.priority, p.id or 0)):
         if source_is_iptv_ok(ps):
             return ps
     return None
@@ -189,6 +210,13 @@ def upsert_record(s: Session, rec: MediaRecord, rule: DiscoveryRule | None = Non
         item.season = rec.season if rec.season is not None else item.season
         item.episode = rec.episode if rec.episode is not None else item.episode
         item.artwork_in_epg = rec.artwork_in_epg
+    meta = item.ai_meta or {}
+    if (created or not item.metadata_locked) and meta.get("title") and meta.get("source_title") == rec.title:
+        # Keep the AI clean-up while the provider's title is unchanged (ai.py).
+        item.title, item.title_key = meta["title"], title_key(meta["title"])
+        item.tags = list(dict.fromkeys(list(rec.tags or []) + list(meta.get("tags") or [])))
+        if meta.get("series"):
+            item.series = meta["series"]
     item.restrictions = rec.restrictions
     item.flags = rec.flags
 
@@ -293,7 +321,7 @@ def set_rights(s: Session, ps: PlaybackSource, rights: RightsStatus, note: str |
     if rights == RightsStatus.AUTHORISED and ps.playback_type not in IPTV_TYPES:
         raise ValueError("Only direct media files/streams and local files can be authorised for IPTV")
     if rights == RightsStatus.AUTHORISED and ps.playback_type == PlaybackType.YOUTUBE_STREAM and not settings.youtube_streaming:
-        raise ValueError("Experimental YouTube streaming is switched off (ATV_YOUTUBE_STREAMING)")
+        raise ValueError("YouTube streaming is switched off (ATV_YOUTUBE_STREAMING)")
     if rights == RightsStatus.AUTHORISED and ps.url and is_youtube_url(ps.url) and ps.playback_type != PlaybackType.YOUTUBE_STREAM:
         raise ValueError("YouTube URLs cannot be authorised as IPTV sources")
     prev = ps.rights_status
